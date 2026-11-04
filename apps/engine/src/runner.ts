@@ -32,6 +32,7 @@ import type {
   Rng,
   RollingState,
   Snapshot,
+  StrategyConfig,
 } from "@tenfold/core";
 import {
   allStrategies,
@@ -42,8 +43,8 @@ import {
   levelTag,
 } from "@tenfold/strategies";
 import type { Proposal, Strategy, StrategyInput } from "@tenfold/strategies";
-import { DESK_FORCE_MIN_MS, DESK_INTERVAL_MS, decide, strategyChanged } from "./desk.js";
-import type { DeskEscalation } from "./desk.js";
+import { DESK_FORCE_MIN_MS, DESK_INTERVAL_MS, VOL_WARMUP_POINTS, decide, strategyChanged } from "./desk.js";
+import type { DeskChange, DeskDecision, DeskEscalation } from "./desk.js";
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -138,13 +139,16 @@ export class ProjectRunner {
   private lastLevelChangeAt?: number;
   private lastPaceChangeAt?: number;
   private lastLevelRemovedAt?: number;
+  private lastClipChangeAt?: number;
+  private lastBreatheAt?: number;
+  private lastLossLimitAt?: number;
   /** Timestamps of levels the desk declared lost (last 24h). */
   private lostLevelTimes: number[] = [];
   private lastEscalation = new Map<string, number>();
   private deskForce = false;
   private budgetLowSeen = false;
-  /** In `ask` mode, the fingerprint and time of the last proposal batch, so the same proposal is not repeated. */
-  private lastProposal?: { key: string; at: number };
+  /** In `ask` mode, when each kind of change was last proposed, so a proposal is not repeated for hours. */
+  private lastProposed = new Map<string, number>();
   private commandAttempts = new Map<string, number>();
   private seeded = false;
 
@@ -617,6 +621,7 @@ export class ProjectRunner {
       const fills24h = fillsSinceStart.filter((f) => f.ts >= now - DAY);
       const defense24h = fills24h.filter((f) => f.side === "buy" && f.reason === "DEF").reduce((a, f) => ({ spentLamports: a.spentLamports + f.inAmount, tokensBought: a.tokensBought + f.outAmount }), { spentLamports: 0n, tokensBought: 0n });
       const ownVolume24hSol = fills24h.reduce((a, f) => a + lamportsToSol(f.side === "buy" ? f.inAmount : f.outAmount), 0);
+      const ownVolume1hSol = fills24h.filter((f) => f.ts >= now - HOUR).reduce((a, f) => a + lamportsToSol(f.side === "buy" ? f.inAmount : f.outAmount), 0);
       const insiderSellRecent = this.ledger.listInsiderSells(this.cfg.id, now - DAY, 1).length > 0;
       this.lostLevelTimes = this.lostLevelTimes.filter((t) => t > now - DAY);
       const out = decide({
@@ -630,16 +635,23 @@ export class ProjectRunner {
         distributedSinceStart: distributed,
         defense24h,
         ownVolume24hSol,
+        ownVolume1hSol,
         insiderSellRecent,
         lastLevelChangeAt: this.lastLevelChangeAt,
         lastLevelRemovedAt: this.lastLevelRemovedAt,
         lastPaceChangeAt: this.lastPaceChangeAt,
+        lastClipChangeAt: this.lastClipChangeAt,
+        lastBreatheAt: this.lastBreatheAt,
+        lastLossLimitAt: this.lastLossLimitAt,
         lostLevelsLast24h: this.lostLevelTimes.length,
         lastLostAt: this.lostLevelTimes[this.lostLevelTimes.length - 1],
       });
 
       const strategyDiffers = strategyChanged(this.cfg.strategy, out.strategy);
       const mandateDiffers = JSON.stringify(out.mandate) !== JSON.stringify(mandate);
+      // While the price history is still too short for a volatility reading the desk places nothing; keep
+      // re-evaluating every minute until it does so the first ladder goes up as soon as the market is readable.
+      if (history.length === 0 || now - history[0]!.ts < (VOL_WARMUP_POINTS + 1) * MINUTE) this.deskForce = true;
       if (out.decisions.length === 0 && !strategyDiffers && !mandateDiffers && !out.pause) {
         for (const e of out.escalations) this.escalate(e, now);
         return;
@@ -648,7 +660,7 @@ export class ProjectRunner {
       // The desk decided on the config it was handed. If the file changed meanwhile (the agent saved a founder
       // change), that decision is stale: adopt the founder's version and decide again on the next tick.
       const fresh = this.reloadConfig ? this.reloadConfig(this.cfg.id) : this.cfg;
-      if (JSON.stringify(fresh.strategy) !== JSON.stringify(this.cfg.strategy) || JSON.stringify(fresh.mandate) !== JSON.stringify(this.cfg.mandate) || fresh.paused !== this.cfg.paused) {
+      if (JSON.stringify(fresh.strategy) !== JSON.stringify(this.cfg.strategy) || JSON.stringify(fresh.mandate) !== JSON.stringify(this.cfg.mandate) || JSON.stringify(fresh.rules) !== JSON.stringify(this.cfg.rules) || fresh.paused !== this.cfg.paused) {
         logger.info("desk: project file changed under it, re-deciding next tick", { project: this.cfg.id });
         this.cfg = fresh;
         this.deskForce = true;
@@ -656,35 +668,40 @@ export class ProjectRunner {
         return;
       }
 
-      const applyStrategy = mandate.autonomy === "auto";
+      // In `auto` everything the desk decided is applied. In `ask` only what REDUCES risk is applied (levels taken
+      // out, the pace lowered or zeroed, distribution switched off, the safety pause); what adds exposure (a new
+      // ladder, a trail-up, a higher pace, a new clip size) is proposed to the founder and never repeated within 6h.
+      const auto = mandate.autonomy === "auto";
+      const applied = auto ? out.decisions : out.decisions.filter((d) => riskReducing(d.change));
+      const proposed = auto ? [] : out.decisions.filter((d) => !riskReducing(d.change) && d.change.kind !== "mandate_started" && d.change.kind !== "pause");
+      const nextStrategy = auto ? out.strategy : safeSubset(fresh.strategy, out.strategy, applied);
       const next: ProjectConfig = {
         ...fresh,
         mandate: out.mandate, // bookkeeping (startTokens) is applied whatever the autonomy
-        strategy: applyStrategy ? out.strategy : fresh.strategy,
+        strategy: nextStrategy,
         paused: out.pause ? true : fresh.paused, // the safety stop is applied whatever the autonomy
       };
-      const bookkeepingOnly = !applyStrategy && !out.pause;
       const changed = JSON.stringify(next) !== JSON.stringify(this.cfg);
       if (changed) {
         this.cfg = next;
         this.persistConfig(this.cfg);
         this.ledger.upsertProject(this.cfg);
       }
-      if (applyStrategy) {
-        if (out.decisions.some((d) => d.change.kind === "place_level" || d.change.kind === "move_level")) this.lastLevelChangeAt = now;
-        if (out.decisions.some((d) => d.change.kind === "remove_level")) this.lastLevelRemovedAt = now;
-        if (out.decisions.some((d) => d.change.kind === "set_pace")) this.lastPaceChangeAt = now;
-        for (const d of out.decisions) if (d.change.kind === "remove_level" && d.change.cause === "lost") this.lostLevelTimes.push(now);
-        for (const d of out.decisions) this.emit("desk_decision", now, { ...d.change, why: d.why });
-      } else {
-        const proposals = out.decisions.filter((d) => d.change.kind !== "mandate_started" && d.change.kind !== "pause");
-        const key = JSON.stringify(proposals.map((d) => d.change));
-        const repeat = this.lastProposal && this.lastProposal.key === key && now - this.lastProposal.at < 6 * HOUR;
-        if (proposals.length > 0 && !repeat) {
-          this.lastProposal = { key, at: now };
-          for (const d of proposals) this.emit("desk_proposal", now, { ...d.change, why: d.why });
-        }
-        void bookkeepingOnly;
+      if (applied.some((d) => d.change.kind === "place_level" || d.change.kind === "move_level")) this.lastLevelChangeAt = now;
+      if (applied.some((d) => d.change.kind === "remove_level")) this.lastLevelRemovedAt = now;
+      if (applied.some((d) => d.change.kind === "remove_level" && d.change.cause === "breathe")) this.lastBreatheAt = now;
+      if (applied.some((d) => d.change.kind === "remove_level" && d.change.cause === "loss_limit")) this.lastLossLimitAt = now;
+      if (applied.some((d) => d.change.kind === "set_pace")) this.lastPaceChangeAt = now;
+      if (applied.some((d) => d.change.kind === "set_clip")) this.lastClipChangeAt = now;
+      for (const d of applied) if (d.change.kind === "remove_level" && d.change.cause === "lost") this.lostLevelTimes.push(now);
+      for (const d of applied) this.emit("desk_decision", now, { ...d.change, why: d.why });
+      // Prices and paces move with every snapshot, so a proposal is identified by its kind: each kind is raised
+      // at most once per PROPOSAL_MIN_INTERVAL_MS, whatever the numbers in it.
+      for (const d of proposed) {
+        const last = this.lastProposed.get(d.change.kind);
+        if (last !== undefined && now - last < PROPOSAL_MIN_INTERVAL_MS) continue;
+        this.lastProposed.set(d.change.kind, now);
+        this.emit("desk_proposal", now, { ...d.change, why: d.why });
       }
       if (out.pause) this.emit("paused", now, { by: "desk", why: out.pause.why });
       logger.info("desk", { project: this.cfg.id, autonomy: mandate.autonomy, decisions: out.decisions.map((d) => d.change.kind) });
@@ -732,6 +749,16 @@ export class ProjectRunner {
     if (paced) this.lastPaceChangeAt = paced.ts;
     const removed = deskEvents.find((ev) => ev.data.kind === "remove_level");
     if (removed) this.lastLevelRemovedAt = removed.ts;
+    const clipped = deskEvents.find((ev) => ev.data.kind === "set_clip");
+    if (clipped) this.lastClipChangeAt = clipped.ts;
+    const breathed = deskEvents.find((ev) => ev.data.kind === "remove_level" && ev.data.cause === "breathe");
+    if (breathed) this.lastBreatheAt = breathed.ts;
+    const lossLimited = deskEvents.find((ev) => ev.data.kind === "remove_level" && ev.data.cause === "loss_limit");
+    if (lossLimited) this.lastLossLimitAt = lossLimited.ts;
+    for (const ev of this.ledger.listEvents(this.cfg.id, { types: ["desk_proposal"], since: now - PROPOSAL_MIN_INTERVAL_MS, limit: 200 })) {
+      const kind = String(ev.data.kind);
+      if ((this.lastProposed.get(kind) ?? 0) < ev.ts) this.lastProposed.set(kind, ev.ts);
+    }
     this.lostLevelTimes = deskEvents
       .filter((ev) => ev.data.kind === "remove_level" && ev.data.cause === "lost")
       .map((ev) => ev.ts)
@@ -798,6 +825,42 @@ export function outcomeUnknown(e: unknown): boolean {
 }
 
 /** Keep at most `max` evenly spaced items of an oldest-first series (the last item is always kept). */
+/** A desk proposal batch in `ask` mode is raised at most this often, whatever it contains. */
+export const PROPOSAL_MIN_INTERVAL_MS = 6 * HOUR;
+
+/** Changes that only ever reduce exposure; applied in `ask` mode as well as `auto`. */
+export function riskReducing(c: DeskChange): boolean {
+  switch (c.kind) {
+    case "remove_level":
+    case "distribution_done":
+    case "pause":
+    case "mandate_started":
+      return true;
+    case "set_pace":
+    case "set_clip":
+      return c.to < c.from;
+    default:
+      return false;
+  }
+}
+
+/**
+ * The founder's strategy with only the risk-reducing part of the desk's decision applied: levels the desk took out,
+ * a lower or zero pace, distribution switched off. Everything else stays as the founder has it.
+ */
+export function safeSubset(current: StrategyConfig, decided: StrategyConfig, applied: DeskDecision[]): StrategyConfig {
+  const next: StrategyConfig = JSON.parse(JSON.stringify(current)) as StrategyConfig;
+  const removed = new Set(applied.filter((d) => d.change.kind === "remove_level").map((d) => (d.change as { price: number }).price));
+  if (removed.size > 0) next.defense.levels = next.defense.levels.filter((l) => l.pinned || !removed.has(l.price));
+  if (!decided.distribution.enabled && next.distribution.enabled) next.distribution.enabled = false;
+  if (decided.distribution.pctOfVaultPerDay < next.distribution.pctOfVaultPerDay) next.distribution.pctOfVaultPerDay = decided.distribution.pctOfVaultPerDay;
+  if (decided.clip.maxSol < next.clip.maxSol) {
+    next.clip.maxSol = decided.clip.maxSol;
+    if (next.clip.minSol > next.clip.maxSol) next.clip.minSol = decided.clip.minSol;
+  }
+  return next;
+}
+
 export function downsample<T>(xs: T[], max: number): T[] {
   if (xs.length <= max || max <= 0) return xs;
   const step = xs.length / max;

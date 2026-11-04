@@ -58,6 +58,13 @@ export function proposeRebalance(input: StrategyInput): Proposal[] {
 
   if (share < lower) {
     // Too little SOL: sell tokens worth `stepSol`, within the cap, outside any defended zone, not right after an own buy.
+    // Under a mandate a rebalance sell is distribution by another name: it obeys every stop that holds distribution
+    // (the desk's pace zero after a team-wallet sell, a liquidity drop or too high an own share, the mandate's
+    // alert line, a mandate that sells nothing, the target reached).
+    if (cfg.mandate) {
+      if (!cfg.strategy.distribution.enabled) return [];
+      if (cfg.mandate.alertFloor !== undefined && snapshot.price < cfg.mandate.alertFloor) return [];
+    }
     if (msSinceLast(lastOrders, now, (o) => o.side === "buy" && COMMITTED.has(o.status)) < REB_OPPOSITE_SIDE_COOLDOWN_MS) return [];
     if (inNoSellZone(snapshot.price, activeLevels(cfg, rolling, snapshot, lastOrders))) return [];
     const minPrice = cfg.strategy.distribution.minPrice;

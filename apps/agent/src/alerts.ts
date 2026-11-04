@@ -61,6 +61,8 @@ export function formatEvent(ev: EngineEvent, cfg: ProjectConfig, ledger: LedgerR
   const d: Data = ev.data ?? {};
   switch (ev.type) {
     case "sell_pressure": {
+      // Under a mandate the desk owns this call (hold, step down, breathe) and says what it did in its own line.
+      if (cfg.mandate) return undefined;
       const snap = ledger.latestSnapshot(cfg.id);
       const price = n(d, "price") ?? snap?.price;
       const levels = cfg.strategy.defense.levels;
@@ -94,6 +96,8 @@ export function formatEvent(ev: EngineEvent, cfg: ProjectConfig, ledger: LedgerR
       );
     }
     case "budget_low": {
+      // Under a mandate the desk escalates "budget used up" itself, with the options, once.
+      if (cfg.mandate) return undefined;
       const left = n(d, "remainingSol") ?? n(d, "leftSol");
       const total = n(d, "budgetSol") ?? cfg.rules.defenseBudgetSol;
       const pct = left !== undefined && total ? (left / total) * 100 : undefined;
@@ -222,7 +226,7 @@ export function formatEvent(ev: EngineEvent, cfg: ProjectConfig, ledger: LedgerR
     }
     case "desk_proposal": {
       const why = s(d, "why") ?? "";
-      return `Desk proposal (nothing changed, you chose to be asked): ${why}\nSay "do it" to apply, or tell me what you want instead.`;
+      return `Desk proposal (not applied: you chose to be asked): ${why}\nTo have it act on this, set the level yourself or switch the mandate to "decide and inform" with /mandate. Nothing applies by itself.`;
     }
     case "desk_escalation": {
       const why = s(d, "why") ?? "";

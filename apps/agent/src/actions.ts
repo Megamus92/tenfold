@@ -106,7 +106,7 @@ function isRaise(v: unknown): v is PendingCapRaise {
 
 /** Cap raises still waiting for their 48h delay. The latest event per raise id wins (pending -> applied/cancelled). */
 export function pendingCapRaises(ledger: Ledger, projectId: string): PendingCapRaise[] {
-  // Direct query: listEvents applies its limit before filtering by type, and a busy engine writes thousands of events a day.
+  // Direct query: every config_changed row is needed, newest first, with no limit.
   const rows = ledger.db
     .prepare(`SELECT data_json FROM events WHERE project_id = ? AND type = 'config_changed' ORDER BY id DESC`)
     .all(projectId) as { data_json: string }[];
@@ -226,7 +226,7 @@ export function getStatus(ctx: ActionContext): ActionResult {
     const target = start > 0n ? (start * BigInt(Math.round(distributePct * 100))) / 10_000n : 0n;
     const distributed = ledger
       .listFills(projectId, { since: cfg.mandate.startedAt, limit: 100_000 })
-      .filter((f) => f.side === "sell" && f.reason === "DIST")
+      .filter((f) => f.side === "sell") // every own sell counts toward the share, as the desk and the reports count it
       .reduce((a, f) => a + f.inAmount, 0n);
     const donePct = target > 0n ? Math.min(100, (Number(distributed) / Number(target)) * 100) : undefined;
     const elapsedPct = Math.min(100, Math.max(0, ((now - cfg.mandate.startedAt) / (horizonDays * 86_400_000)) * 100));

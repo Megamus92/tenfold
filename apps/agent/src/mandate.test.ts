@@ -127,11 +127,30 @@ describe("set_mandate", () => {
     expect(rm.message).toMatch(/the desk's/);
   });
 
-  it("status shows the mandate and the horizon progress; runTool dispatches set_mandate", () => {
+  it("status shows the mandate and the horizon progress, counting every own sell as the desk does; runTool dispatches set_mandate", () => {
     runTool(ctx(), { name: "set_mandate", input: { profile: "balanced", horizonDays: 20, distributePct: 10 } }).needsConfirmation!.apply();
+    const c = loadProject("test");
+    c.mandate!.startTokens = "1000000000000"; // 1,000,000 tokens; the 10% target is 100,000
+    saveProject(c);
+    const fill = (orderId: string, reason: "DIST" | "REB" | "MANUAL", tokens: bigint) =>
+      fx.ledger.insertFill({ orderId, projectId: "test", side: "sell", reason, inAmount: tokens, outAmount: 1_000_000n, price: 0.0002, feeLamports: 5000n, ts: Date.now(), paper: true });
+    fill("f1", "DIST", 20_000_000_000n);
+    fill("f2", "REB", 20_000_000_000n);
+    fill("f3", "MANUAL", 10_000_000_000n);
     const st = getStatus(ctx());
     expect(st.message).toMatch(/Mandate: hold reasonable levels/);
-    expect((st.data as { mandate?: { profile: string } }).mandate?.profile).toBe("balanced");
+    expect(st.message).toMatch(/Horizon: 50% of the target/);
+    expect((st.data as { mandate?: { profile: string; donePct: number } }).mandate?.profile).toBe("balanced");
+    expect((st.data as { mandate?: { donePct: number } }).mandate?.donePct).toBeCloseTo(50, 6);
+  });
+
+  it("under a mandate the engine's sell-pressure and budget-low questions are not relayed: the desk owns those calls", () => {
+    runTool(ctx(), { name: "set_mandate", input: { profile: "balanced" } }).needsConfirmation!.apply();
+    const c = loadProject("test");
+    expect(formatEvent({ type: "sell_pressure", projectId: "test", ts: Date.now(), data: { price: 0.00019, level: 0.00018, costPerHourSol: 2, hoursLeft: 2 } }, c, fx.ledger)).toBeUndefined();
+    expect(formatEvent({ type: "budget_low", projectId: "test", ts: Date.now(), data: { leftSol: 1, budgetSol: 10, pct: 10 } }, c, fx.ledger)).toBeUndefined();
+    // without a mandate the founder is asked, as before
+    expect(formatEvent({ type: "sell_pressure", projectId: "test", ts: Date.now(), data: { price: 0.00019, level: 0.00018, costPerHourSol: 2, hoursLeft: 2 } }, fx.cfg, fx.ledger)).toMatch(/Hold, lower the level, or let it breathe\?/);
   });
 });
 
@@ -146,8 +165,8 @@ describe("desk alerts", () => {
 
   it("turns a proposal into an ask and an escalation into a question with options", () => {
     const prop = formatEvent({ type: "desk_proposal", projectId: "test", ts: Date.now(), data: { kind: "set_pace", why: "Pace 0.30% → 0.15%: sellers dominate." } }, fx.cfg, fx.ledger);
-    expect(prop).toMatch(/^Desk proposal \(nothing changed/);
-    expect(prop).toMatch(/Say "do it"/);
+    expect(prop).toMatch(/^Desk proposal \(not applied/);
+    expect(prop).toMatch(/Nothing applies by itself/);
     const esc = formatEvent(
       { type: "desk_escalation", projectId: "test", ts: Date.now(), data: { topic: "budget_top_up", why: "The defense budget is used up.", options: ["top up", "leave it"] } },
       fx.cfg,

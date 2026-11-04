@@ -66,7 +66,7 @@ Then, from the founder's private Telegram chat: `/start demo <bindCode>`. The bo
 
 ## 5b. What the founder sees on day one
 
-`/start <id> <bindCode>` → two taps (profile, then share and horizon) → "Mandate set" → within a minute "Desk: Placed 3 defense levels at ..." and a pace line → one line per decision after that, a report every morning at 09:00 local, a 7-day report on Mondays. "Your call:" messages are the only ones that wait for an answer.
+`/start <id> <bindCode>` → two taps (profile, then share and horizon) → "Mandate set" → once the engine has ten minutes of prices for the token (usually already the case) "Desk: Placed 3 defense levels at ..." and a pace line → one line per decision after that, a report every morning at 09:00 local, a 7-day report on Mondays. "Your call:" messages are the only ones that wait for an answer; the engine's own sell-pressure and budget-low questions are not relayed under a mandate (the desk owns those calls).
 
 ## 6. Before any founder money (ranked, from KNOWN-RISKS.md)
 

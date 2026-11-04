@@ -51,17 +51,27 @@ export const HOUR_PRESSURE_RATIO = 1.5;
 export const HOUR_STRENGTH_RATIO = 1.5;
 /** Sell/buy flow over the last 15 minutes above this, with price on a level, is adverse flow: breathe, do not hold. */
 export const FAST_PRESSURE_RATIO = 2;
-/** Liquidity now under this fraction of an hour ago is a pull: everything stops. Needs several samples on both ends. */
+/** Adverse flow needs size: mean 5-minute sells of at least this many SOL (or two clips) before the desk reacts to it. */
+export const FAST_PRESSURE_MIN_SOL = 0.5;
+/** Liquidity now under this fraction of an hour ago is a pull: everything stops. Needs several samples on both ends,
+ *  over a 15-minute window, and a pool reading (never the quote-impact estimate) for the hard stop. */
 export const LIQUIDITY_PULL_FRACTION = 0.5;
-export const LIQUIDITY_SAMPLES_MIN = 2;
+export const LIQUIDITY_SAMPLES_MIN = 5;
+export const LIQUIDITY_WINDOW_MS = 15 * MINUTE;
 /** Liquidity under this fraction of an hour ago pauses distribution only. */
 export const LIQUIDITY_SOFT_FRACTION = 0.7;
 /** Lose this many levels within 24h and the desk stops re-placing them: it does not buy into a trend. */
 export const LOST_LEVELS_BEFORE_REST = 2;
 /** The pace is re-set at most this often, unless it drops to zero. */
 export const PACE_CHANGE_MIN_INTERVAL_MS = HOUR;
-/** Level distance is capped at this fraction under the anchor. */
-export const MAX_LEVEL_DISTANCE = 0.3;
+/** The deepest rung of the ladder is never more than this fraction under the anchor; the base distance scales down to fit. */
+export const MAX_LADDER_DEPTH = 0.4;
+/** The first ladder waits for this many one-minute price points unless a 24h volatility is known. */
+export const VOL_WARMUP_POINTS = 10;
+/** Clip size is re-derived at most this often, from the hour's median liquidity. */
+export const CLIP_CHANGE_MIN_INTERVAL_MS = HOUR;
+/** A distribution pace under this (% of the vault per day) is no pace: the pool has no real volume to sell into. */
+export const PACE_FLOOR_PCT = 0.01;
 /** Vol regime: 1h vol above this multiple of 24h vol widens levels and halves their budgets. */
 export const VOL_SPIKE_RATIO = 2;
 /** A 5-minute drop beyond this pauses distribution and rests new levels (tier-1 breaker); the risk engine's breaker is the hard tier. */
@@ -129,8 +139,9 @@ export interface DeskInput {
   distributedSinceStart: bigint;
   /** Defense fills of the last 24h: SOL spent and tokens bought, for the mark-to-market loss limit. */
   defense24h?: { spentLamports: bigint; tokensBought: bigint };
-  /** SOL volume of Tenfold's own fills over the last 24h (both sides). */
+  /** SOL volume of Tenfold's own fills over the last 24h and the last hour (both sides). The pool's flows include them. */
   ownVolume24hSol?: number;
+  ownVolume1hSol?: number;
   /** True when a declared team wallet sold in the last 24h. */
   insiderSellRecent: boolean;
   /** Last time a level was placed or moved by the desk (ms). */
@@ -142,6 +153,12 @@ export interface DeskInput {
   lastLostAt?: number;
   /** Last time the desk changed the pace (ms). */
   lastPaceChangeAt?: number;
+  /** Last time the desk re-derived the clip size (ms). */
+  lastClipChangeAt?: number;
+  /** Last time the desk let a level breathe: the ladder keeps one extra step of distance for `trailUpHours` after it. */
+  lastBreatheAt?: number;
+  /** Last time the loss limit or the inventory stop rested the defense: it stays resting for a day after it. */
+  lastLossLimitAt?: number;
 }
 
 export interface DeskOutput {
@@ -178,6 +195,12 @@ export function realizedHourVol(series: { ts: number; price: number }[]): number
   return Math.sqrt(variance) * Math.sqrt(stepsPerHour);
 }
 
+/** One point per minute (the last sample of each minute), so realized vol is measured on the same grid live and in backtests. */
+export function minuteGrid<T extends { ts: number }>(series: T[]): T[] {
+  const byMinute = new Map<number, T>();
+  for (const s of series) byMinute.set(Math.floor(s.ts / MINUTE), s);
+  return [...byMinute.entries()].sort((a, b) => a[0] - b[0]).map((e) => e[1]);
+}
 function mean(xs: number[]): number | undefined {
   if (xs.length === 0) return undefined;
   return xs.reduce((a, b) => a + b, 0) / xs.length;
@@ -192,6 +215,9 @@ function fmtPrice(p: number): string {
 }
 function fmtSol(x: number): string {
   return x.toFixed(x >= 10 ? 1 : 2);
+}
+function fmtPct(x: number): string {
+  return `${x >= 0.1 || x === 0 ? x.toFixed(2) : x.toPrecision(2)}%`;
 }
 function round(x: number, digits: number): number {
   const f = 10 ** digits;
@@ -231,11 +257,17 @@ export function decide(input: DeskInput): DeskOutput {
   const anchor = Math.min(ref, snapshot.price);
   const anchorName = lastHour.length >= 3 && anchor === ref ? "the 1h reference" : "the current price";
 
-  // Distance in realized-volatility units with the profile's floor; widened in a volatility spike.
-  const vol1h = realizedHourVol([...lastHour.map((x) => ({ ts: x.ts, price: x.price })), { ts: now, price: snapshot.price }]);
-  const vol24h = input.history24h && input.history24h.length >= 12 ? realizedHourVol(input.history24h.map((x) => ({ ts: x.ts, price: x.price }))) : undefined;
-  const spike = vol24h !== undefined && vol24h > 0 && vol1h > VOL_SPIKE_RATIO * vol24h;
-  const baseDist = Math.min(MAX_LEVEL_DISTANCE, Math.max(p.floorPct / 100, p.sigmaMult * vol1h) * (spike ? 1.5 : 1));
+  // Distance in realized-volatility units with the profile's floor; widened in a volatility spike. Both vols are
+  // measured on a one-minute grid: raw 10-second quote mids carry bid-ask bounce that is not volatility.
+  const minutePts = minuteGrid([...lastHour.map((x) => ({ ts: x.ts, price: x.price })), { ts: now, price: snapshot.price }]);
+  const vol24h = input.history24h && input.history24h.length >= 12 ? realizedHourVol(minuteGrid(input.history24h.map((x) => ({ ts: x.ts, price: x.price })))) : undefined;
+  const volReady = minutePts.length >= VOL_WARMUP_POINTS || vol24h !== undefined;
+  const vol1h = minutePts.length >= VOL_WARMUP_POINTS ? realizedHourVol(minutePts) : (vol24h ?? 0);
+  // A spike is only a spike when the hour's volatility actually exceeds the profile's floor distance: two tiny
+  // numbers in a 1:3 ratio on a quiet drift are not a regime change.
+  const spike = vol24h !== undefined && vol24h > 0 && vol1h > VOL_SPIKE_RATIO * vol24h && p.sigmaMult * vol1h > p.floorPct / 100;
+  const deepestMult = p.ladder[p.ladder.length - 1] ?? 1;
+  const baseDist = Math.min(MAX_LADDER_DEPTH / deepestMult, Math.max(p.floorPct / 100, p.sigmaMult * vol1h) * (spike ? 1.5 : 1));
   const distPct = baseDist * 100;
 
   // Hour flows: the ratio is meaningful whatever the sampling; the rate (SOL/h) is the mean 5-minute excess x 12.
@@ -244,7 +276,7 @@ export function decide(input: DeskInput): DeskOutput {
   const burnPerHour = Math.max(0, lastHour.length >= 3 ? sell1h - buy1h : snapshot.sellFlow5mSol - snapshot.buyFlow5mSol) * 12;
   const fastSell = mean(last15.map((s) => s.sellFlow5mSol)) ?? snapshot.sellFlow5mSol;
   const fastBuy = mean(last15.map((s) => s.buyFlow5mSol)) ?? snapshot.buyFlow5mSol;
-  const fastPressure = last15.length >= 2 && fastSell > 0 && fastSell > fastBuy * FAST_PRESSURE_RATIO;
+  const fastPressure = last15.length >= 2 && fastSell >= Math.max(FAST_PRESSURE_MIN_SOL, 2 * strategy.clip.maxSol) && fastSell > fastBuy * FAST_PRESSURE_RATIO;
   const drop5m = rolling.price5mAgo && rolling.price5mAgo > 0 ? (rolling.price5mAgo - snapshot.price) / rolling.price5mAgo : 0;
   const tier1 = drop5m >= TIER1_DROP;
 
@@ -270,12 +302,13 @@ export function decide(input: DeskInput): DeskOutput {
   }
 
   // ---- A. liquidity: a confirmed pull stops everything; a softer drop pauses distribution ----
-  const liqNowSamples = [...last15.filter((s) => s.ts >= now - 5 * MINUTE && s.liquiditySol !== undefined).map((s) => s.liquiditySol!), ...(snapshot.liquiditySol !== undefined ? [snapshot.liquiditySol] : [])];
-  const liqOldSamples = lastHour.filter((s) => s.ts <= now - 45 * MINUTE && s.liquiditySol !== undefined).map((s) => s.liquiditySol!);
+  const liqNowSamples = [...lastHour.filter((s) => s.ts >= now - LIQUIDITY_WINDOW_MS && s.liquiditySol !== undefined).map((s) => s.liquiditySol!), ...(snapshot.liquiditySol !== undefined ? [snapshot.liquiditySol] : [])];
+  const liqOldSamples = lastHour.filter((s) => s.ts <= now - HOUR + LIQUIDITY_WINDOW_MS && s.liquiditySol !== undefined).map((s) => s.liquiditySol!);
   const liqNow = median(liqNowSamples);
   const liqThen = median(liqOldSamples);
   const liqKnown = liqNow !== undefined && liqThen !== undefined && liqThen > 0 && liqNowSamples.length >= LIQUIDITY_SAMPLES_MIN && liqOldSamples.length >= LIQUIDITY_SAMPLES_MIN;
-  if (liqKnown && liqNow! < liqThen! * LIQUIDITY_PULL_FRACTION) {
+  // The hard stop needs a pool reading; the quote-impact estimate flips with routing and only ever pauses distribution.
+  if (liqKnown && snapshot.liquiditySource !== "impact" && liqNow! < liqThen! * LIQUIDITY_PULL_FRACTION) {
     const why = `Pool liquidity dropped from about ${fmtSol(liqThen!)} to ${fmtSol(liqNow!)} SOL within the hour, confirmed on several readings. Everything is stopped: trading into a drained pool only loses.`;
     out.pause = { why };
     out.decisions.push({ change: { kind: "pause" }, why });
@@ -287,7 +320,14 @@ export function decide(input: DeskInput): DeskOutput {
   // ---- B. defense: a ladder of trailing levels under the anchor ----
   const defense = strategy.defense;
   const defenseWanted = p.levels > 0 && cfg.rules.defenseBudgetSol > 0;
-  if (defenseWanted) {
+  if (!defenseWanted) {
+    // No defense budget: the desk's own levels come out; the founder's pinned ones stay.
+    const managedLeft = defense.levels.filter((l) => !l.pinned);
+    if (managedLeft.length > 0) {
+      for (const l of managedLeft) out.decisions.push({ change: { kind: "remove_level", price: l.price, cause: "no_budget" }, why: "The defense budget is 0: the desk's levels are withdrawn." });
+      defense.levels = defense.levels.filter((l) => l.pinned);
+    }
+  } else {
     defense.enabled = true;
     const maxBelow = defense.maxDistanceBelowPct ?? p.maxDistanceBelowPct;
     const lifeLeft = lamportsToSol(defenseBudgetRemainingLamports(cfg, rolling));
@@ -295,52 +335,58 @@ export function decide(input: DeskInput): DeskOutput {
     const budgetable = Math.min(lifeLeft, vaultSol);
     const managed = defense.levels.filter((l) => !l.pinned);
     const keep: DefenseLevel[] = defense.levels.filter((l) => l.pinned);
-    let stepDown = 0;
+    // After a breathe the ladder keeps one extra step of distance for a while, so the replacement lands lower.
+    const breathedRecently = input.lastBreatheAt !== undefined && now - input.lastBreatheAt < p.trailUpHours * HOUR;
     let changedLevels = false;
     let removedNow = false;
 
-    // Mark-to-market loss limit on what the defense bought in the last 24h, as a share of vault value.
+    // Loss controls on what the defense bought in the last 24h: a mark-to-market loss as a share of vault value,
+    // or an inventory stop when the bought tokens are worth a profile's fraction less than they cost. Either one
+    // rests the defense for a day (hysteresis: the price wobbling around the threshold does not restart it).
     const def24 = input.defense24h;
-    const mtmLoss = def24 && def24.spentLamports > 0n ? lamportsToSol(def24.spentLamports) - (Number(def24.tokensBought) / 10 ** cfg.decimals) * snapshot.price : 0;
-    const lossBreached = vaultValueSol > 0 && mtmLoss > (p.lossLimitPct / 100) * vaultValueSol;
+    const spent24 = def24 && def24.spentLamports > 0n ? lamportsToSol(def24.spentLamports) : 0;
+    const mtmLoss = spent24 > 0 ? spent24 - (Number(def24!.tokensBought) / 10 ** cfg.decimals) * snapshot.price : 0;
+    const lossNow = spent24 > 0 && ((vaultValueSol > 0 && mtmLoss > (p.lossLimitPct / 100) * vaultValueSol) || mtmLoss / spent24 > p.inventoryStopPct);
+    const lossResting = input.lastLossLimitAt !== undefined && now - input.lastLossLimitAt < DAY;
+    const lossBreached = lossNow || lossResting;
 
+    // Lost levels are counted first so every line of this run tells the same story.
     const lost = input.lostLevelsLast24h ?? 0;
-    let lostNow = 0;
+    const lostLevels = managed.filter((l) => levelLost(l, snapshot.price, maxBelow));
+    const lostNow = lostLevels.length;
+    const totalLost = lost + lostNow;
     const resting = lost >= LOST_LEVELS_BEFORE_REST && input.lastLostAt !== undefined && now - input.lastLostAt < restMsFor(p, lost);
+    const willRest = totalLost >= LOST_LEVELS_BEFORE_REST;
 
     for (const level of managed.slice().sort((a, b) => b.price - a.price)) {
       const ownLeft = Math.max(0, level.budgetSol - lamportsToSol(levelSpentLamports(recentOrders, level)));
-      if (levelLost(level, snapshot.price, maxBelow)) {
+      if (lostLevels.includes(level)) {
         const pct = ((level.price - snapshot.price) / level.price) * 100;
-        lostNow++;
-        const total = lost + lostNow;
-        const willRest = total >= LOST_LEVELS_BEFORE_REST;
         out.decisions.push({
           change: { kind: "remove_level", price: level.price, cause: "lost" },
-          why: `Level ${fmtPrice(level.price)} is lost: price is ${pct.toFixed(0)}% under it. Not chasing it down${willRest ? `; that is ${total} levels lost in 24h, so the defense rests ${Math.round(restMsFor(p, total) / HOUR)} h instead of buying into the trend` : `; re-placing lower after a ${p.cooldownMin} min cooldown`}.`,
+          why: `Level ${fmtPrice(level.price)} is lost: price is ${pct.toFixed(0)}% under it. Not chasing it down${willRest ? `; that is ${totalLost} levels lost in 24h, so the defense rests ${Math.round(restMsFor(p, totalLost) / HOUR)} h instead of buying into the trend` : `; re-placing lower after a ${p.cooldownMin} min cooldown`}.`,
         });
         changedLevels = true;
         removedNow = true;
         continue;
       }
       if (ownLeft < MIN_LEVEL_BUDGET_SOL * 0.2 && lifeLeft >= MIN_LEVEL_BUDGET_SOL && dayLeft >= MIN_LEVEL_BUDGET_SOL) {
-        out.decisions.push({ change: { kind: "remove_level", price: level.price, cause: "spent" }, why: `Level ${fmtPrice(level.price)} has spent its ${fmtSol(level.budgetSol)} SOL. Re-placing with fresh budget after a ${p.cooldownMin} min cooldown.` });
+        out.decisions.push({ change: { kind: "remove_level", price: level.price, cause: "spent" }, why: `Level ${fmtPrice(level.price)} has spent its ${fmtSol(level.budgetSol)} SOL. Re-placing it with fresh budget after a ${p.cooldownMin} min cooldown.` });
         changedLevels = true;
         removedNow = true;
         continue;
       }
-      // Breathe: holding this level would burn today's budget too fast, or the last 15 minutes are one-sided selling
-      // (adverse flow: holding against it is paying informed sellers). Only while there is a day budget to speak of.
+      // Breathe: holding this level would burn the DAY's budget too fast, or the last 15 minutes are one-sided selling
+      // of real size (adverse flow: holding against it is paying informed sellers). Only while there is a day budget.
       if (levelInPlay(level, snapshot.price) && dayLeft >= MIN_LEVEL_BUDGET_SOL) {
-        const hours = burnPerHour > 0 ? Math.min(dayLeft, ownLeft) / burnPerHour : Infinity;
+        const hours = burnPerHour > 0 ? dayLeft / burnPerHour : Infinity;
         if ((burnPerHour > 0 && hours < p.breatheUnderHours) || fastPressure) {
           out.decisions.push({
             change: { kind: "remove_level", price: level.price, cause: "breathe" },
             why: fastPressure
-              ? `Sellers are ${(fastSell / Math.max(fastBuy, 1e-9)).toFixed(1)}x buyers over the last 15 minutes with price on ${fmtPrice(level.price)}. Letting it breathe: stepping the level down rather than absorbing one-sided flow.`
-              : `Holding ${fmtPrice(level.price)} costs about ${fmtSol(burnPerHour)} SOL/hour at this flow and the budget would last ${hours.toFixed(1)} h. Letting it breathe: stepping the level down.`,
+              ? `Sellers are ${(fastSell / Math.max(fastBuy, 1e-9)).toFixed(1)}x buyers over the last 15 minutes with price on ${fmtPrice(level.price)}. Letting it breathe: the ladder steps down one notch rather than absorbing one-sided flow.`
+              : `Holding ${fmtPrice(level.price)} costs about ${fmtSol(burnPerHour)} SOL/hour at this flow and today's budget would last ${hours.toFixed(1)} h. Letting it breathe: the ladder steps down one notch.`,
           });
-          stepDown = Math.max(stepDown, 1);
           changedLevels = true;
           removedNow = true;
           continue;
@@ -349,26 +395,25 @@ export function decide(input: DeskInput): DeskOutput {
       keep.push(level);
     }
 
-    const totalLost = lost + lostNow;
-    const restNow = resting || (lostNow > 0 && totalLost >= LOST_LEVELS_BEFORE_REST) || lossBreached || tier1;
+    const restNow = resting || (lostNow > 0 && willRest) || lossBreached || tier1;
     if (restNow) {
       // Trend, loss or breaker protection: no managed level stays live while resting.
       for (const l of keep.filter((x) => !x.pinned)) {
         out.decisions.push({
           change: { kind: "remove_level", price: l.price, cause: lossBreached ? "loss_limit" : "rest" },
-          why: lossBreached ? "Defense is resting: the daily loss limit on defended inventory is reached." : tier1 ? `Defense is resting: price fell ${(drop5m * 100).toFixed(0)}% in 5 minutes.` : "Defense is resting after repeated lost levels.",
+          why: lossBreached ? "Defense is resting for a day: the loss limit on defended inventory is reached." : tier1 ? `Defense is resting: price fell ${(drop5m * 100).toFixed(0)}% in 5 minutes.` : "Defense is resting after repeated lost levels.",
         });
         changedLevels = true;
       }
       for (let i = keep.length - 1; i >= 0; i--) if (!keep[i]!.pinned) keep.splice(i, 1);
-      if (lossBreached) {
+      if (lossNow) {
         out.escalations.push({
           topic: "loss_limit",
-          why: `Defense bought ${fmtSol(lamportsToSol(def24!.spentLamports))} SOL of tokens in the last 24h that are now worth ${fmtSol(lamportsToSol(def24!.spentLamports) - mtmLoss)} SOL: a ${fmtSol(mtmLoss)} SOL mark-to-market loss, over the ${p.lossLimitPct}% daily limit. The defense rests until tomorrow; distribution follows its own rules.`,
+          why: `Defense bought ${fmtSol(spent24)} SOL of tokens in the last 24h that are now worth ${fmtSol(spent24 - mtmLoss)} SOL: a ${fmtSol(mtmLoss)} SOL mark-to-market loss (${((mtmLoss / spent24) * 100).toFixed(0)}% of what it cost). The defense rests for a day rather than averaging down; distribution follows its own rules.`,
           options: ["keep resting", "switch to the distribute profile", "defend anyway (set a level yourself)"],
           throttleMs: DAY,
         });
-      } else if (totalLost >= LOST_LEVELS_BEFORE_REST) {
+      } else if (lostNow > 0 && willRest) {
         out.escalations.push({
           topic: "trend_down",
           why: `${totalLost} defense levels lost within 24h. The desk is resting the defense for ${Math.round(restMsFor(p, totalLost) / HOUR)} h rather than buying into a falling market; distribution follows its own rules.`,
@@ -399,21 +444,25 @@ export function decide(input: DeskInput): DeskOutput {
         });
       }
     } else {
-      // Trail up: price has run well above the top level and the level has not been needed for a while.
+      // Trail up: price has run well above the top level and held there, the level has not been needed for a
+      // while, and nothing in this run says the market is turning (no level removed, no adverse flow, no drop,
+      // hour's return not negative). A ladder is never lifted into a falling market.
       const managedKept = keep.filter((l) => !l.pinned).sort((a, b) => b.price - a.price);
       const top = managedKept[0];
       const trailWindow = history.filter((s) => s.ts >= now - p.trailUpHours * HOUR && s.ts < now);
       // At most one trail-up per trailUpHours: a ladder that follows every swing leaks intent and spams the founder.
       const trailThrottleOk = input.lastLevelChangeAt === undefined || now - input.lastLevelChangeAt >= p.trailUpHours * HOUR;
-      if (top && trailThrottleOk) {
+      const hourStart = lastHour[0]?.price ?? snapshot.price;
+      const marketTurning = removedNow || fastPressure || drop5m > 0 || snapshot.price < hourStart;
+      if (top && trailThrottleOk && !marketTurning) {
         const trailAt = top.price * (1 + p.trailUpSteps * baseDist);
         const quiet = !recentOrders.some((o) => o.side === "buy" && isLevelOrder(o, top) && o.createdAt > now - p.trailUpHours * HOUR);
         const heldAbove = trailWindow.length >= 3 && trailWindow[0]!.ts <= now - p.trailUpHours * HOUR * 0.9 && trailWindow.every((s) => s.price > top.price * (1 + (p.trailUpSteps - 1) * baseDist));
-        if (ref > trailAt && low1h > trailAt * (1 - baseDist / 2) && quiet && heldAbove) {
+        if (ref > trailAt && snapshot.price > trailAt && quiet && heldAbove) {
           // Move the ladder up by rank so two levels never land on the same price; one line for the whole ladder.
           const moves: { from: number; to: number }[] = [];
           managedKept.forEach((level, rank) => {
-            const to = sig(anchor * (1 - baseDist * p.ladder[rank]!));
+            const to = sig(anchor * (1 - Math.min(MAX_LADDER_DEPTH, baseDist * p.ladder[rank]!)));
             if (to > level.price && Math.abs(to - level.price) > baseDist * TRAIL_TOLERANCE * level.price && !keep.some((l) => l !== level && sameLevel(l.price, to))) {
               const idx = keep.indexOf(level);
               keep[idx] = { price: to, budgetSol: level.budgetSol, placedAt: now };
@@ -430,32 +479,51 @@ export function decide(input: DeskInput): DeskOutput {
         }
       }
 
-      // Place the missing rungs of the ladder, after the cooldown that follows a consumed level.
+      // Place the vacant rungs of the ladder, after the cooldown that follows a consumed level. Rungs are positions
+      // under the anchor, not a count: each live level claims the rung it is closest to, the rest are vacant.
       const cooldownOk = input.lastLevelRemovedAt === undefined || now - input.lastLevelRemovedAt >= p.cooldownMin * MINUTE;
       const refreshOk = input.lastLevelChangeAt === undefined || now - input.lastLevelChangeAt >= DESK_INTERVAL_MS || changedLevels;
-      const live = keep.filter((l) => !l.pinned).length;
-      if (live < p.levels && cooldownOk && refreshOk && !removedNow && dayLeft >= MIN_LEVEL_BUDGET_SOL) {
+      const liveLevels = keep.filter((l) => !l.pinned);
+      if (liveLevels.length < p.levels && cooldownOk && refreshOk && !removedNow && volReady && dayLeft >= MIN_LEVEL_BUDGET_SOL) {
+        const stepDown = breathedRecently ? 1 : 0;
+        const rungs = p.ladder.map((mult, rank) => {
+          const steps = mult + stepDown;
+          return { rank, steps, price: sig(anchor * (1 - Math.min(MAX_LADDER_DEPTH, baseDist * steps))) };
+        });
+        const claimed = new Set<number>();
+        for (const level of liveLevels) {
+          let best: number | undefined;
+          let bestGap = Infinity;
+          for (const r of rungs) {
+            if (claimed.has(r.rank)) continue;
+            const gap = Math.abs(Math.log(level.price / r.price));
+            if (gap < bestGap) { bestGap = gap; best = r.rank; }
+          }
+          if (best !== undefined) claimed.add(best);
+        }
         // Budget for the ladder: what can be funded today, split by the profile's weights; a vol spike halves it.
         const ladderBudget = Math.min(budgetable, dayLeft) * (spike ? 0.5 : 1);
         const placed: { price: number; budgetSol: number; steps: number }[] = [];
-        for (let rank = live; rank < p.levels; rank++) {
-          const steps = p.ladder[rank]! + stepDown;
-          const price = sig(anchor * (1 - baseDist * steps));
-          if (!(price > 0) || keep.some((l) => sameLevel(l.price, price))) continue;
-          const budget = round(ladderBudget * p.split[rank]!, 2);
+        for (const r of rungs) {
+          if (claimed.has(r.rank) || liveLevels.length + placed.length >= p.levels) continue;
+          if (!(r.price > 0) || keep.some((l) => sameLevel(l.price, r.price))) continue;
+          const budget = round(ladderBudget * p.split[r.rank]!, 2);
           if (budget < MIN_LEVEL_BUDGET_SOL) continue;
-          keep.push({ price, budgetSol: budget, placedAt: now });
-          placed.push({ price, budgetSol: budget, steps });
+          keep.push({ price: r.price, budgetSol: budget, placedAt: now });
+          placed.push({ price: r.price, budgetSol: budget, steps: r.steps });
           changedLevels = true;
         }
         if (placed.length > 0) {
           const first = placed[0]!;
+          const last = placed[placed.length - 1]!;
+          const under = (l: { price: number }) => ((1 - l.price / anchor) * 100).toFixed(0);
+          const range = placed.length === 1 ? `${under(first)}%` : `${under(first)}% to ${under(last)}%`;
           out.decisions.push({
             change: { kind: "place_level", price: first.price, budgetSol: round(placed.reduce((a, l) => a + l.budgetSol, 0), 2), levels: placed.map((l) => ({ price: l.price, budgetSol: l.budgetSol })) },
             why:
               `Placed ${placed.length === 1 ? "a defense level" : `${placed.length} defense levels`} at ${placed.map((l) => `${fmtPrice(l.price)} (${fmtSol(l.budgetSol)} SOL)`).join(", ")}: ` +
-              `${(distPct * first.steps).toFixed(0)}% to ${(distPct * placed[placed.length - 1]!.steps).toFixed(0)}% under ${anchorName} ${fmtPrice(anchor)}` +
-              `${vol1h * p.sigmaMult > p.floorPct / 100 ? `, sized for a ${(vol1h * 100).toFixed(0)}%/h market` : ""}${spike ? ", volatility spike: half budget" : ""}.`,
+              `${range} under ${anchorName} ${fmtPrice(anchor)}` +
+              `${vol1h * p.sigmaMult > p.floorPct / 100 ? `, sized for a ${(vol1h * 100).toFixed(0)}%/h market` : ""}${stepDown ? ", one notch lower after the breathe" : ""}${spike ? ", volatility spike: half budget" : ""}.`,
           });
         }
       }
@@ -464,13 +532,23 @@ export function decide(input: DeskInput): DeskOutput {
   }
 
   // ---- C. clip size from pool depth: one clip never moves the price more than the profile allows ----
-  if (snapshot.liquiditySol !== undefined && snapshot.liquiditySol > 0) {
-    const target = round(Math.min(CLIP_MAX_SOL, Math.max(CLIP_MIN_SOL, snapshot.liquiditySol * (p.clipReservePct / 100))), 3);
+  // Derived from the hour's median liquidity (one reading flips with routing), at most once an hour.
+  const liqForClip = median([...lastHour.filter((x) => x.liquiditySol !== undefined && x.liquiditySol > 0).map((x) => x.liquiditySol!), ...(snapshot.liquiditySol !== undefined && snapshot.liquiditySol > 0 ? [snapshot.liquiditySol] : [])]);
+  const clipCooldownOk = input.lastClipChangeAt === undefined || now - input.lastClipChangeAt >= CLIP_CHANGE_MIN_INTERVAL_MS;
+  if (liqForClip !== undefined && liqForClip > 0 && clipCooldownOk) {
+    const raw = liqForClip * (p.clipReservePct / 100);
+    const target = round(Math.min(CLIP_MAX_SOL, Math.max(CLIP_MIN_SOL, raw)), 3);
     const current = strategy.clip.maxSol;
     if (Math.abs(target - current) / Math.max(current, 0.01) > 0.25) {
       strategy.clip.maxSol = target;
       if (strategy.clip.minSol > target) strategy.clip.minSol = round(Math.max(0.01, target / 2), 3);
-      out.decisions.push({ change: { kind: "set_clip", from: current, to: target }, why: `Clip size ${fmtSol(current)} → ${fmtSol(target)} SOL: about ${p.clipReservePct}% of the pool's ${fmtSol(snapshot.liquiditySol)} SOL, so one clip moves the price under ${(p.clipReservePct * 2).toFixed(1)}%.` });
+      const impactPct = (target / liqForClip) * 2 * 100;
+      out.decisions.push({
+        change: { kind: "set_clip", from: current, to: target },
+        why: raw < CLIP_MIN_SOL
+          ? `Clip size ${fmtSol(current)} → ${fmtSol(target)} SOL, the smallest clip worth sending: the pool holds about ${fmtSol(liqForClip)} SOL, so even that moves the price about ${impactPct.toFixed(1)}%.`
+          : `Clip size ${fmtSol(current)} → ${fmtSol(target)} SOL: about ${p.clipReservePct}% of the pool's ${fmtSol(liqForClip)} SOL, so one clip moves the price under ${(p.clipReservePct * 2).toFixed(1)}%.`,
+      });
     }
   }
 
@@ -535,10 +613,11 @@ export function decide(input: DeskInput): DeskOutput {
           throttleMs: 12 * HOUR,
         });
       }
-      // Own share of the pool's volume: a market maker that is most of the market is the market.
-      const externalVol24h = input.history24h && input.history24h.length >= 12 ? (mean(input.history24h.map((s) => s.buyFlow5mSol + s.sellFlow5mSol)) ?? 0) * 288 : undefined;
+      // Own share of the pool's volume: a market maker that is most of the market is the market. The pool's flows
+      // already include Tenfold's own fills, so the share is own over total, not own over total plus own.
+      const totalVol24h = input.history24h && input.history24h.length >= 12 ? (mean(input.history24h.map((s) => s.buyFlow5mSol + s.sellFlow5mSol)) ?? 0) * 288 : undefined;
       const own = input.ownVolume24hSol ?? 0;
-      const ownShare = externalVol24h !== undefined && externalVol24h + own > 0 ? own / (externalVol24h + own) : 0;
+      const ownShare = totalVol24h !== undefined && totalVol24h > 0 ? Math.min(1, own / totalVol24h) : 0;
       if (ownShare >= OWN_SHARE_STOP) {
         factor = 0;
         notes.push(`Tenfold was ${(ownShare * 100).toFixed(0)}% of the pool's volume over 24h, too much of the market`);
@@ -552,15 +631,20 @@ export function decide(input: DeskInput): DeskOutput {
         factor *= 0.5;
         notes.push(`Tenfold is ${(ownShare * 100).toFixed(0)}% of the pool's volume, halving to stay a minority`);
       }
-      // Participation ceiling: sells per hour at most p x the pool's external volume per hour.
+      // Participation ceiling: sells per hour at most p x the pool's EXTERNAL volume per hour (own fills taken out,
+      // otherwise the ceiling would grow with Tenfold's own selling).
       let pace = round(Math.min(cfg.rules.dailySellCapPct, base * factor), 4);
-      const extVolHourSol = (buy1h + sell1h) * 12;
-      if (pace > 0 && extVolHourSol > 0 && vaultTokens > 0) {
+      const extVolHourSol = Math.max(0, (buy1h + sell1h) * 12 - (input.ownVolume1hSol ?? 0));
+      if (pace > 0 && vaultTokens > 0) {
         const maxTokensPerDay = (p.participation * extVolHourSol * 24) / snapshot.price;
         const participationPct = round((maxTokensPerDay / vaultTokens) * 100, 4);
         if (participationPct < pace) {
           pace = participationPct;
           notes.push(`capped at ${Math.round(p.participation * 100)}% of the pool's real volume`);
+        }
+        if (pace < PACE_FLOOR_PCT) {
+          pace = 0;
+          notes.push("there is no real volume to sell into; waiting for the pool to come alive");
         }
       }
       const current = d.enabled ? d.pctOfVaultPerDay : 0;
@@ -569,7 +653,7 @@ export function decide(input: DeskInput): DeskOutput {
       if (rel > PACE_CHANGE_MIN_REL && paceCooldownOk) {
         d.pctOfVaultPerDay = pace;
         d.enabled = pace > 0;
-        const why = pace === 0 ? `Distribution paused: ${notes.join("; ")}.` : `Distribution pace ${current.toFixed(2)}% → ${pace.toFixed(2)}% of the vault per day${notes.length ? ": " + notes.join("; ") : ""}.`;
+        const why = pace === 0 ? `Distribution paused: ${notes.join("; ")}.` : `Distribution pace ${fmtPct(current)} → ${fmtPct(pace)} of the vault per day${notes.length ? ": " + notes.join("; ") : ""}.`;
         out.decisions.push({ change: { kind: "set_pace", from: current, to: pace }, why });
       }
       if (horizonExceedsCap(mandate, cfg.rules.dailySellCapPct) && !mandate.acceptedSlowPace) {
@@ -587,8 +671,8 @@ export function decide(input: DeskInput): DeskOutput {
   if (input.insiderSellRecent) {
     out.escalations.push({
       topic: "insider_sell",
-      why: "A declared team wallet sold in the last 24h. Distribution is on hold so Tenfold does not add to that selling.",
-      options: ["it was planned, resume distribution", "keep distribution on hold for 24h"],
+      why: "A declared team wallet sold in the last 24h. Distribution (and rebalance selling) is on hold for 24h so Tenfold does not add to that selling; it resumes by itself after that. The defense keeps working.",
+      options: ["keep going like this", "pause everything", "withdraw the wallet from the team list if it is not the team's"],
       throttleMs: DAY,
     });
   }

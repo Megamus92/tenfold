@@ -254,6 +254,8 @@ export interface Snapshot {
   price: number;
   /** Pool liquidity on the SOL side, if known (SOL). */
   liquiditySol?: number;
+  /** Where the liquidity reading comes from: a pool reading (dex) or an estimate from quote impact (impact). Not persisted. */
+  liquiditySource?: "dex" | "impact";
   /** Aggressor buy / sell volume over the last 5 minutes, in SOL, from the trade feed when available. */
   buyFlow5mSol: number;
   sellFlow5mSol: number;

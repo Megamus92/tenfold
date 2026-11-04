@@ -169,10 +169,11 @@ export class JupiterFeed implements PriceFeed {
         throw new FeedError(`rpc balances failed: ${(e as Error).message}`, true, e);
       }),
     ]);
-    // DexScreener's pool reading wins over the impact estimate when it has one.
+    // DexScreener's pool reading wins over the impact estimate when it has one; the desk only hard-stops on a pool reading.
     const { liquiditySol: dexLiq, ...flows } = flow;
     const liquiditySol = dexLiq ?? priceAndLiq.liquiditySol;
-    return { ...priceAndLiq, ...flows, ...balances, ...(liquiditySol !== undefined ? { liquiditySol } : {}) };
+    const liquiditySource = dexLiq !== undefined ? "dex" : priceAndLiq.liquiditySol !== undefined ? "impact" : undefined;
+    return { ...priceAndLiq, ...flows, ...balances, ...(liquiditySol !== undefined ? { liquiditySol, liquiditySource } : {}) };
   }
 
   private async price(cfg: ProjectConfig): Promise<{ price: number; liquiditySol?: number }> {
@@ -326,6 +327,7 @@ export class SimFeed implements PriceFeed {
     return {
       price: this.price,
       liquiditySol: this.liquiditySol,
+      liquiditySource: "dex",
       buyFlow5mSol: total * clamped,
       sellFlow5mSol: total * (1 - clamped),
       vaultTokens: this.vaultTokens,

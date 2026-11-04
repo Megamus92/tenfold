@@ -7,8 +7,8 @@
  * Calibration follows the practitioner literature summarised in research/mm-best-practices.md: level distances in
  * realized-volatility units (Avellaneda-Stoikov), a ladder of levels weighted to the deeper ones (Hummingbot
  * order levels), distribution as a participation rate of real pool volume (Virtu's 5/10/15-20% tiers), a cooldown
- * after a consumed level (filled_order_delay), a daily mark-to-market loss limit on defense (prop-desk practice),
- * and clip sizes derived from pool depth (constant-product impact ≈ 2 × clip / reserve).
+ * after a consumed level (filled_order_delay), a daily mark-to-market loss limit and an inventory stop on defense
+ * (prop-desk practice), and clip sizes derived from pool depth (constant-product impact ≈ 2 × clip / reserve).
  */
 import type { Mandate, MandateProfile, ProjectConfig, StrategyConfig } from "./types.js";
 
@@ -32,8 +32,10 @@ export interface ProfileParams {
   breatheUnderHours: number;
   /** Rest the defense this many hours after 2, 3, 4+ levels lost within 24h. */
   restHours: [number, number, number];
-  /** Daily mark-to-market loss limit on defended inventory, % of vault value; breached = defense rests until tomorrow. */
+  /** Daily mark-to-market loss limit on defended inventory, % of vault value; breached = defense rests for a day. */
   lossLimitPct: number;
+  /** Inventory stop: the defense rests for a day when what it bought in the last 24h is worth this fraction less than it cost. */
+  inventoryStopPct: number;
   /** Default share of the vault to distribute and the default horizon (consistent with the default 0.5% daily cap). */
   distributePct: number;
   horizonDays: number;
@@ -63,6 +65,7 @@ export const PROFILES: Record<MandateProfile, ProfileParams> = {
     breatheUnderHours: 2,
     restHours: [6, 12, 24],
     lossLimitPct: 3,
+    inventoryStopPct: 0.1,
     distributePct: 20,
     horizonDays: 60,
     participation: 0.05,
@@ -85,6 +88,7 @@ export const PROFILES: Record<MandateProfile, ProfileParams> = {
     breatheUnderHours: 4,
     restHours: [6, 12, 24],
     lossLimitPct: 2,
+    inventoryStopPct: 0.15,
     distributePct: 30,
     horizonDays: 60,
     participation: 0.1,
@@ -107,6 +111,7 @@ export const PROFILES: Record<MandateProfile, ProfileParams> = {
     breatheUnderHours: 6,
     restHours: [12, 24, 48],
     lossLimitPct: 1.5,
+    inventoryStopPct: 0.2,
     distributePct: 50,
     horizonDays: 100,
     participation: 0.15,

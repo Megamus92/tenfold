@@ -55,7 +55,7 @@ export function shareKeyboard(): InlineKeyboard {
   return kb;
 }
 
-export const Q_PROFILE = "What matters most right now?\n\nProtect: hold the price first, sell slowly, two levels close under the price.\nBalanced: one level, steady distribution.\nDistribute: move supply first, defend lightly and lower.";
+export const Q_PROFILE = "What matters most right now?\n\nProtect: hold the price first. Levels close under the price, slow selling.\nBalanced: reasonable levels, steady selling into real demand.\nDistribute: move supply first. Lighter defense, further down.";
 export const Q_SHARE = "How much of the vault should go to buyers, and over how long? The desk turns this into a daily pace, never above your daily sell cap.";
 
 export class MandateWizard {
@@ -114,6 +114,12 @@ export class MandateWizard {
       }
       const pct = Number(ctx.match[1]);
       const days = Number(ctx.match[2]);
+      // Only the keyboard's own presets are accepted: a forged callback never reaches the mandate.
+      const preset = (pct === 0 && days === 30) || SHARE_PRESETS.some((x) => x.pct === pct && x.days === days);
+      if (!preset) {
+        await ctx.answerCallbackQuery({ text: "Pick one of the options." });
+        return;
+      }
       await ctx.answerCallbackQuery();
       await this.edit(ctx, `${Q_SHARE}\n\n→ ${pct === 0 ? "only defend" : `${pct}% over ${days} days`}`);
       const cfg = this.deps.loadProject(s.projectId);

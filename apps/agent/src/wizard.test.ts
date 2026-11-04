@@ -51,15 +51,18 @@ describe("mandate wizard", () => {
     await bot.handleUpdate(tap("tm:p:balanced"));
     expect(calls.map((c) => c.method)).toEqual(["answerCallbackQuery", "editMessageText", "sendMessage"]);
     expect(String(calls[2]!.payload.text)).toMatch(/How much of the vault/);
+    // a forged callback that is not one of the keyboard's presets never reaches the mandate
     await bot.handleUpdate(tap("tm:h:50:60"));
+    expect(loadProject("test").mandate).toBeUndefined();
+    expect(String(calls[calls.length - 1]!.payload.text)).toMatch(/Pick one of the options/);
+    await bot.handleUpdate(tap("tm:h:50:100"));
     const cfg = loadProject("test");
-    expect(cfg.mandate).toMatchObject({ profile: "balanced", distributePct: 50, horizonDays: 60, autonomy: "auto", startedAt: 1_700_000_000_000 });
+    expect(cfg.mandate).toMatchObject({ profile: "balanced", distributePct: 50, horizonDays: 100, autonomy: "auto", startedAt: 1_700_000_000_000 });
     expect(cfg.strategy.distribution.enabled).toBe(true);
-    expect(cfg.strategy.distribution.pctOfVaultPerDay).toBeCloseTo(0.5, 5); // 50/60 = 0.83 capped at the 0.5% cap
+    expect(cfg.strategy.distribution.pctOfVaultPerDay).toBeCloseTo(0.5, 5); // 50/100 = the 0.5% cap exactly
     const last = String(calls[calls.length - 1]!.payload.text);
     expect(last).toMatch(/^Mandate set: hold reasonable levels/);
-    expect(last).toMatch(/above the 0.5% cap/);
-    expect(last).toMatch(/Your call/);
+    expect(last).not.toMatch(/above the 0.5% cap/);
     expect(fx.ledger.pendingCommands().some((c) => c.type === "reload")).toBe(true);
   });
 

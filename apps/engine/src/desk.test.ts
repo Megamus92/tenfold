@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_RULES, DEFAULT_STRATEGY, Ledger, PROFILES, parseProjectConfig, seededRng, solToLamports, strategyFromMandate, tokensToBase } from "@tenfold/core";
 import type { Mandate, Order, ProjectConfig, RollingState, Snapshot } from "@tenfold/core";
-import { DESK_FORCE_MIN_MS, DESK_INTERVAL_MS, decide, median, realizedHourVol } from "./desk.js";
+import { CLIP_MIN_SOL, DESK_FORCE_MIN_MS, DESK_INTERVAL_MS, MAX_LADDER_DEPTH, decide, median, minuteGrid, realizedHourVol } from "./desk.js";
 import type { DeskInput } from "./desk.js";
 import { ProjectRunner, downsample } from "./runner.js";
 import type { Executor, PriceFeed } from "./runner.js";
@@ -53,11 +53,11 @@ function rolling(over: Partial<RollingState> = {}): RollingState {
   return { soldLast24h: 0n, defenseSpentLast24hLamports: 0n, defenseSpentTotalLamports: 0n, ordersLastHour: 0, price5mAgo: P, ...over };
 }
 
-/** A flat history at `price`, one snapshot per 5 minutes, ending just before T0. */
-function history(price: number, opts: { hours?: number; liquiditySol?: number; buy?: number; sell?: number } = {}): Snapshot[] {
+/** A flat history at `price`, one snapshot per `stepMin` minutes (5 by default), ending just before T0. */
+function history(price: number, opts: { hours?: number; liquiditySol?: number; buy?: number; sell?: number; stepMin?: number } = {}): Snapshot[] {
   const out: Snapshot[] = [];
   const hours = opts.hours ?? 1;
-  for (let t = T0 - hours * HOUR; t < T0; t += 5 * MINUTE) {
+  for (let t = T0 - hours * HOUR; t < T0; t += (opts.stepMin ?? 5) * MINUTE) {
     out.push(snap({ ts: t, price, liquiditySol: opts.liquiditySol ?? 200, buyFlow5mSol: opts.buy ?? 1, sellFlow5mSol: opts.sell ?? 1 }));
   }
   return out;
@@ -77,6 +77,10 @@ function kinds(out: ReturnType<typeof decide>): string[] {
 }
 function level(price: number, budgetSol = 2, extra: Partial<{ pinned: boolean; placedAt: number }> = {}) {
   return { price, budgetSol, ...extra };
+}
+/** Six significant digits, as the desk writes prices. */
+function sigp(x: number): number {
+  return Number(x.toPrecision(6));
 }
 
 const bal = PROFILES.balanced;
@@ -201,6 +205,141 @@ describe("desk manager: decide", () => {
     expect(out.strategy.defense.levels).toEqual([]);
     const later = decide(fresh({ cfg: { ...c, strategy: out.strategy }, snapshot: snap(), history: history(P), lastLevelRemovedAt: T0 - HOUR }));
     expect(later.strategy.defense.levels[0]!.price).toBeCloseTo(P * (1 - d1 * bal.ladder[0]!), 9);
+    // while the breathe is recent the whole ladder sits one notch lower
+    const lower = decide(fresh({ cfg: { ...c, strategy: out.strategy }, snapshot: snap(), history: history(P), lastLevelRemovedAt: T0 - HOUR, lastBreatheAt: T0 - HOUR }));
+    expect(lower.strategy.defense.levels[0]!.price).toBeCloseTo(P * (1 - d1 * (bal.ladder[0]! + 1)), 9);
+    expect(lower.decisions.find((d) => d.change.kind === "place_level")?.why).toMatch(/one notch lower/);
+  });
+
+  it("re-places a consumed TOP rung at the top, not at the bottom: rungs are positions, not a count", () => {
+    const c = started();
+    const old = T0 - 2 * HOUR;
+    const ladder = bal.ladder.map((m) => sigp(P * (1 - d1 * m)));
+    c.strategy.defense.levels = [level(ladder[0]!, 1.25, { placedAt: old }), level(ladder[1]!, 1.75, { placedAt: old }), level(ladder[2]!, 2, { placedAt: old })];
+    const spent: Order = { id: "o1", projectId: "d1", side: "buy", reason: "DEF", inputMint: "x", outputMint: "y", amountIn: solToLamports(1.25), maxSlippageBps: 100, refPrice: P, status: "filled", createdAt: old + MINUTE, updatedAt: old + MINUTE, note: `level:${ladder[0]} under` };
+    const out = decide(input({ cfg: c, recentOrders: [spent] }));
+    expect(out.decisions.find((d) => d.change.kind === "remove_level")?.change).toMatchObject({ cause: "spent", price: ladder[0] });
+    expect(out.strategy.defense.levels.map((l) => l.price)).toEqual([ladder[1], ladder[2]]);
+    const later = decide(fresh({ cfg: { ...c, strategy: out.strategy }, recentOrders: [spent], lastLevelRemovedAt: T0 - HOUR }));
+    const prices = later.strategy.defense.levels.map((l) => l.price);
+    expect(prices).toHaveLength(3);
+    expect(prices[0]).toBeCloseTo(ladder[0]!, 12); // back at the top rung
+    expect(prices[1]).toBe(ladder[1]);
+    expect(prices[2]).toBe(ladder[2]);
+    expect(Math.min(...prices)).toBeGreaterThanOrEqual(P * (1 - d1 * bal.ladder[2]! * 1.001));
+    const placed = later.decisions.find((d) => d.change.kind === "place_level");
+    expect(placed?.why).toMatch(/^Placed a defense level at .* 5% under/);
+    // a breathed top rung comes back one notch under where it was, not at the deepest rung
+    const breathed = decide(fresh({ cfg: { ...c, strategy: out.strategy }, recentOrders: [spent], lastLevelRemovedAt: T0 - HOUR, lastBreatheAt: T0 - 10 * MINUTE }));
+    const bp = breathed.strategy.defense.levels.map((l) => l.price);
+    expect(bp).toHaveLength(3);
+    expect(bp[0]).toBe(ladder[1]); // the survivors claim the two upper rungs of the lowered ladder
+    expect(bp[2]).toBeCloseTo(P * (1 - d1 * (bal.ladder[2]! + 1)), 12);
+  });
+
+  it("caps the deepest rung at the ladder depth and still places three rungs in a wild market", () => {
+    const wild = history(P).map((s, i) => ({ ...s, price: P * (1 + (i % 2 ? 0.1 : -0.1)) }));
+    const out = decide(fresh({ cfg: cfg(), history: wild }));
+    const prices = out.strategy.defense.levels.map((l) => l.price);
+    expect(prices).toHaveLength(3);
+    const anchor = Math.min(P, median(wild.map((x) => x.price).concat([P]))!);
+    expect(Math.min(...prices)).toBeCloseTo(anchor * (1 - MAX_LADDER_DEPTH), 12);
+    expect(Math.max(...prices)).toBeGreaterThan(anchor * (1 - MAX_LADDER_DEPTH / bal.ladder[2]! * 1.01));
+  });
+
+  it("never trails the ladder up in a run that removed a level, into adverse flow, or on a down hour", () => {
+    const c = started();
+    // one level lost high up, one deep: the deep one is not lifted in the same run
+    c.strategy.defense.levels = [level(P * 1.3, 2, { placedAt: T0 - DAY }), level(P * 0.5, 2, { placedAt: T0 - DAY })];
+    const out = decide(input({ cfg: c, snapshot: snap({ price: P }), history: history(P, { hours: 4 }), lastLevelChangeAt: T0 - DAY }));
+    expect(kinds(out)).toContain("remove_level");
+    expect(kinds(out)).not.toContain("move_level");
+    // the price has held above for hours but this hour's return is negative
+    const c2 = started();
+    c2.strategy.defense.levels = [level(P * 0.5, 2, { placedAt: T0 - DAY }), level(P * 0.45, 2, { placedAt: T0 - DAY })];
+    const downHour = history(P, { hours: 4 }).map((s) => (s.ts >= T0 - HOUR ? { ...s, price: P * 1.02 } : s));
+    const down = decide(input({ cfg: c2, snapshot: snap({ price: P }), history: downHour, lastLevelChangeAt: T0 - DAY }));
+    expect(kinds(down)).not.toContain("move_level");
+    // one-sided selling of real size right now
+    const adverse = decide(input({ cfg: c2, snapshot: snap({ price: P, sellFlow5mSol: 3, buyFlow5mSol: 0.5 }), history: history(P, { hours: 4 }).map((s) => (s.ts >= T0 - 15 * MINUTE ? { ...s, sellFlow5mSol: 3, buyFlow5mSol: 0.5 } : s)), lastLevelChangeAt: T0 - DAY }));
+    expect(kinds(adverse)).not.toContain("move_level");
+  });
+
+  it("breathes on the DAY's budget, not the rung's, and ignores tiny one-sided flow", () => {
+    const c = started();
+    c.strategy.defense.levels = [level(P, 1.25, { placedAt: T0 - HOUR })];
+    // 0.7 SOL/h of excess selling against 5 SOL of day budget: 7 h, no breathe (the rung alone would last 1.8 h)
+    const mild = decide(input({ cfg: c, snapshot: snap({ sellFlow5mSol: 0.3, buyFlow5mSol: 0.2417 }), history: history(P, { sell: 0.3, buy: 0.2417 }) }));
+    expect(kinds(mild)).not.toContain("remove_level");
+    // three sells against one buy, 0.05 SOL in all: not adverse flow
+    const tiny = decide(input({ cfg: c, snapshot: snap({ sellFlow5mSol: 0.0375, buyFlow5mSol: 0.0125 }), history: history(P, { sell: 0.0375, buy: 0.0125 }) }));
+    expect(kinds(tiny)).not.toContain("remove_level");
+    // the same ratio with size breathes
+    const big = decide(input({ cfg: c, snapshot: snap({ sellFlow5mSol: 3, buyFlow5mSol: 1 }), history: history(P, { sell: 3, buy: 1 }) }));
+    expect(big.decisions.find((d) => d.change.kind === "remove_level")?.change).toMatchObject({ cause: "breathe" });
+  });
+
+  it("counts its own share against the pool's total volume, which already contains it", () => {
+    const quiet = history(P, { hours: 24, buy: 0.05, sell: 0.05 }); // 28.8 SOL a day in all
+    // 30% of the total is over the stop (own over total plus own would read 23%)
+    const out = decide(input({ history24h: quiet, ownVolume24hSol: 28.8 * 0.3 }));
+    expect(out.strategy.distribution.enabled).toBe(false);
+    expect(out.escalations.map((e) => e.topic)).toContain("own_share");
+    // the participation cap is on EXTERNAL volume: own fills in the hour do not raise it
+    const c = started();
+    const withOwn = decide(input({ cfg: c, history: history(P, { buy: 0.3, sell: 0.3 }), snapshot: snap({ buyFlow5mSol: 0.3, sellFlow5mSol: 0.3 }), ownVolume1hSol: 7.2 }));
+    const without = decide(input({ cfg: c, history: history(P, { buy: 0.3, sell: 0.3 }), snapshot: snap({ buyFlow5mSol: 0.3, sellFlow5mSol: 0.3 }), ownVolume1hSol: 0 }));
+    expect(withOwn.strategy.distribution.pctOfVaultPerDay).toBeLessThanOrEqual(without.strategy.distribution.pctOfVaultPerDay);
+    expect(withOwn.strategy.distribution.enabled).toBe(false); // all of the hour's volume was Tenfold's: nothing real to sell into
+  });
+
+  it("rests the defense on the inventory stop, and keeps resting for a day", () => {
+    const c = started();
+    c.strategy.defense.levels = [level(P * 0.95, 2, { placedAt: T0 - HOUR })];
+    // bought 5 SOL of tokens now worth 2.5 SOL: 1% of a 240 SOL vault (under the 2% limit) but half of what it cost
+    const out = decide(input({ cfg: c, defense24h: { spentLamports: solToLamports(5), tokensBought: tokensToBase(12_500, DEC) } }));
+    expect(out.strategy.defense.levels).toEqual([]);
+    expect(out.escalations.find((e) => e.topic === "loss_limit")?.why).toMatch(/50% of what it cost/);
+    // two hours later the price is back a little: still resting, nothing placed, no new escalation
+    const later = decide(fresh({ cfg: { ...c, strategy: out.strategy }, lastLossLimitAt: T0 - 2 * HOUR, lastLevelRemovedAt: T0 - 2 * HOUR }));
+    expect(kinds(later)).not.toContain("place_level");
+    expect(later.escalations.map((e) => e.topic)).not.toContain("loss_limit");
+    const dayAfter = decide(fresh({ cfg: { ...c, strategy: out.strategy }, lastLossLimitAt: T0 - DAY - 1, lastLevelRemovedAt: T0 - 2 * HOUR }));
+    expect(kinds(dayAfter)).toContain("place_level");
+  });
+
+  it("measures volatility on a one-minute grid: bid-ask bounce in 10-second quotes is not volatility", () => {
+    const bounce: Snapshot[] = [];
+    let i = 0;
+    for (let t = T0 - HOUR; t < T0; t += 10_000) bounce.push(snap({ ts: t, price: P * (1 + (i++ % 2 ? 0.005 : -0.005)) }));
+    expect(minuteGrid(bounce)).toHaveLength(60);
+    const quiet24 = history(P, { hours: 24 }).map((s, j) => ({ ...s, price: P * (1 + (j % 2 ? 0.002 : -0.002)) }));
+    const out = decide(fresh({ cfg: cfg(), history: bounce, history24h: quiet24 }));
+    const placed = out.decisions.find((d) => d.change.kind === "place_level");
+    expect(placed).toBeDefined();
+    expect(placed!.why).not.toMatch(/sized for|volatility spike/);
+    expect(out.strategy.defense.levels[0]!.price).toBeCloseTo(Math.min(P, P * 1.005) * (1 - d1 * bal.ladder[0]!), 9);
+    // and no ladder at all before ten minutes of prices are in
+    const young = decide(fresh({ cfg: cfg(), history: bounce.slice(-30) }));
+    expect(kinds(young)).not.toContain("place_level");
+  });
+
+  it("a dead pool gets no pace and one plain line, not 0.00% → 0.00% every hour", () => {
+    const dead = decide(input({ history: history(P, { buy: 0.0001, sell: 0.0001 }), snapshot: snap({ buyFlow5mSol: 0.0001, sellFlow5mSol: 0.0001 }) }));
+    expect(dead.strategy.distribution.enabled).toBe(false);
+    const line = dead.decisions.find((d) => d.change.kind === "set_pace");
+    expect(line?.why).toMatch(/no real volume/);
+    expect(line?.why).not.toMatch(/0\.00% → 0\.00%/);
+    const again = decide(input({ cfg: { ...started(), strategy: dead.strategy }, history: history(P, { buy: 0.0001, sell: 0.0001 }), snapshot: snap({ buyFlow5mSol: 0.0001, sellFlow5mSol: 0.0001 }), lastPaceChangeAt: T0 - HOUR }));
+    expect(kinds(again)).not.toContain("set_pace");
+  });
+
+  it("with the defense budget set to 0 the desk's levels are withdrawn and the founder's stay", () => {
+    const c = started(mandate(), { rules: { defenseBudgetSol: 0 } });
+    c.strategy.defense.levels = [level(P * 0.95, 2, { placedAt: T0 - HOUR }), level(0.0001, 3, { pinned: true })];
+    const out = decide(input({ cfg: c }));
+    expect(out.strategy.defense.levels).toEqual([level(0.0001, 3, { pinned: true })]);
+    expect(out.decisions.find((d) => d.change.kind === "remove_level")?.change).toMatchObject({ cause: "no_budget" });
   });
 
   it("rests the defense and escalates once the budget is used up, with a weekly reminder at most", () => {
@@ -308,15 +447,22 @@ describe("desk manager: decide", () => {
     expect(ok.escalations.map((e) => e.topic)).not.toContain("horizon_unreachable");
   });
 
-  it("pauses everything on a liquidity pull only when several readings agree, and asks the founder", () => {
-    const one = decide(input({ snapshot: snap({ liquiditySol: 60 }), history: history(P, { liquiditySol: 200 }) }));
+  it("pauses everything on a liquidity pull only when a quarter hour of pool readings agrees, and asks the founder", () => {
+    const one = decide(input({ snapshot: snap({ liquiditySol: 60 }), history: history(P, { liquiditySol: 200, stepMin: 1 }) }));
     expect(one.pause).toBeUndefined();
-    const recentLow = history(P, { liquiditySol: 200 }).map((s) => (s.ts >= T0 - 5 * MINUTE ? { ...s, liquiditySol: 60 } : s));
-    const confirmed = decide(input({ snapshot: snap({ liquiditySol: 60 }), history: recentLow }));
+    // three low readings over five minutes are not enough either
+    const few = history(P, { liquiditySol: 200, stepMin: 1 }).map((s) => (s.ts >= T0 - 3 * MINUTE ? { ...s, liquiditySol: 60 } : s));
+    expect(decide(input({ snapshot: snap({ liquiditySol: 60 }), history: few })).pause).toBeUndefined();
+    const recentLow = history(P, { liquiditySol: 200, stepMin: 1 }).map((s) => (s.ts >= T0 - 15 * MINUTE ? { ...s, liquiditySol: 60 } : s));
+    const confirmed = decide(input({ snapshot: snap({ liquiditySol: 60, liquiditySource: "dex" }), history: recentLow }));
     expect(confirmed.pause?.why).toMatch(/liquidity/i);
     expect(kinds(confirmed)).toContain("pause");
     expect(confirmed.escalations.map((e) => e.topic)).toContain("liquidity_pull");
-    const softer = history(P, { liquiditySol: 200 }).map((s) => (s.ts >= T0 - 5 * MINUTE ? { ...s, liquiditySol: 130 } : s));
+    // the quote-impact estimate flips with routing: it never hard-stops, it only pauses distribution
+    const estimate = decide(input({ snapshot: snap({ liquiditySol: 60, liquiditySource: "impact" }), history: recentLow }));
+    expect(estimate.pause).toBeUndefined();
+    expect(estimate.strategy.distribution.enabled).toBe(false);
+    const softer = history(P, { liquiditySol: 200, stepMin: 1 }).map((s) => (s.ts >= T0 - 15 * MINUTE ? { ...s, liquiditySol: 130 } : s));
     const soft = decide(input({ snapshot: snap({ liquiditySol: 130 }), history: softer }));
     expect(soft.pause).toBeUndefined();
     expect(soft.strategy.distribution.enabled).toBe(false);
@@ -358,16 +504,33 @@ describe("desk manager: decide", () => {
     expect(out.escalations.map((e) => e.topic)).toContain("own_share");
   });
 
-  it("sizes the clip from the pool's depth", () => {
-    const out = decide(input({ snapshot: snap({ liquiditySol: 2000 }) }));
+  it("sizes the clip from the hour's median pool depth, at most once an hour, and does not flap on a noisy estimate", () => {
+    const out = decide(input({ snapshot: snap({ liquiditySol: 2000 }), history: history(P, { liquiditySol: 2000 }) }));
     expect(out.decisions.find((d) => d.change.kind === "set_clip")).toBeDefined();
     expect(out.strategy.clip.maxSol).toBe(10); // 0.5% of 2000
-    const small = decide(input({ snapshot: snap({ liquiditySol: 40 }) }));
+    const small = decide(input({ snapshot: snap({ liquiditySol: 40 }), history: history(P, { liquiditySol: 40 }) }));
     expect(small.strategy.clip.maxSol).toBe(0.2);
     expect(small.strategy.clip.minSol).toBeLessThanOrEqual(0.2);
     // a change under 25% is noise and left alone
-    const near = decide(input({ snapshot: snap({ liquiditySol: 80 }) }));
+    const near = decide(input({ snapshot: snap({ liquiditySol: 80 }), history: history(P, { liquiditySol: 80 }) }));
     expect(near.strategy.clip.maxSol).toBe(0.5);
+    // one reading of 2000 against an hour at 100 is not the pool's depth (100 x 0.5% is the 0.5 SOL already set)
+    const spike = decide(input({ snapshot: snap({ liquiditySol: 2000 }), history: history(P, { liquiditySol: 100 }) }));
+    expect(spike.decisions.find((d) => d.change.kind === "set_clip")).toBeUndefined();
+    // an estimate alternating 35 / 70 between runs: one clip from the median, then nothing for an hour
+    const flap = history(P, { liquiditySol: 35, stepMin: 1 }).map((s, i) => (i % 2 ? { ...s, liquiditySol: 70 } : s));
+    const first = decide(input({ snapshot: snap({ liquiditySol: 70 }), history: flap }));
+    expect(first.decisions.filter((d) => d.change.kind === "set_clip")).toHaveLength(1);
+    const c = started();
+    c.strategy.clip.maxSol = first.strategy.clip.maxSol;
+    const second = decide(input({ cfg: c, snapshot: snap({ liquiditySol: 35 }), history: flap, lastClipChangeAt: T0 - 20 * MINUTE }));
+    expect(second.decisions.filter((d) => d.change.kind === "set_clip")).toHaveLength(0);
+    expect(second.decisions.filter((d) => d.change.kind === "set_pace")).toHaveLength(0);
+    expect(second.pause).toBeUndefined();
+    // a pool with a few SOL gets the smallest clip, and the line says so
+    const tiny = decide(input({ snapshot: snap({ liquiditySol: 5 }), history: history(P, { liquiditySol: 5 }) }));
+    expect(tiny.strategy.clip.maxSol).toBe(CLIP_MIN_SOL);
+    expect(tiny.decisions.find((d) => d.change.kind === "set_clip")?.why).toMatch(/smallest clip/);
   });
 });
 
@@ -398,10 +561,21 @@ function harness(c: ProjectConfig, opts: { reload?: (id: string) => ProjectConfi
   return { ledger, feed, runner, saved, advance: (ms: number) => (now += ms), now: () => now };
 }
 
+/** Tick for the volatility warm-up (one snapshot a minute for a quarter hour) so the desk has a readable market. */
+async function warm(h: ReturnType<typeof harness>): Promise<void> {
+  for (let i = 0; i < 15; i++) {
+    await h.runner.tick();
+    h.advance(MINUTE);
+  }
+  await h.runner.tick();
+}
+
 describe("desk manager in the runner", () => {
-  it("auto: applies decisions, persists them and writes desk_decision events; re-runs only after the interval", async () => {
+  it("auto: places nothing before the market is readable, then applies decisions, persists them and writes desk_decision events; re-runs only after the interval", async () => {
     const h = harness(cfg());
     await h.runner.tick();
+    expect(h.ledger.listEvents("d1", { types: ["desk_decision"], limit: 50 }).map((e) => e.data.kind)).not.toContain("place_level");
+    await warm(h);
     const events = h.ledger.listEvents("d1", { types: ["desk_decision"], limit: 50 });
     expect(events.map((e) => e.data.kind)).toContain("place_level");
     expect(h.runner.cfg.strategy.defense.levels).toHaveLength(3);
@@ -416,27 +590,39 @@ describe("desk manager in the runner", () => {
     expect(h.ledger.listEvents("d1", { types: ["desk_decision"], limit: 50 }).length).toBe(events.length);
   });
 
-  it("ask: proposes once, applies only the bookkeeping, and does not repeat the same proposal", async () => {
+  it("ask: proposes what adds exposure once per six hours even on a drifting price, applies what reduces it, and keeps the bookkeeping", async () => {
     const h = harness(cfg(mandate({ autonomy: "ask" })));
-    await h.runner.tick();
+    await warm(h);
     const first = h.ledger.listEvents("d1", { types: ["desk_proposal"], limit: 50 });
-    expect(first.length).toBeGreaterThan(0);
-    expect(h.ledger.listEvents("d1", { types: ["desk_decision"], limit: 50 })).toEqual([]);
+    expect(first.map((e) => e.data.kind)).toContain("place_level");
+    expect(h.ledger.listEvents("d1", { types: ["desk_decision"], limit: 50 }).filter((e) => e.data.kind !== "mandate_started")).toEqual([]);
     expect(h.runner.cfg.strategy.defense.levels).toEqual([]);
     expect(h.runner.cfg.mandate?.startTokens).toBeDefined();
-    for (let i = 0; i < 3; i++) {
+    // the price drifts a little every run: the proposal's prices change, the batch is still not repeated within 6h
+    for (let i = 0; i < 12; i++) {
+      h.feed.price *= 0.998;
       h.advance(DESK_INTERVAL_MS);
       await h.runner.tick();
     }
     expect(h.ledger.listEvents("d1", { types: ["desk_proposal"], limit: 50 }).length).toBe(first.length);
+    h.advance(6 * HOUR);
+    await h.runner.tick();
+    expect(h.ledger.listEvents("d1", { types: ["desk_proposal"], limit: 50 }).length).toBeGreaterThan(first.length);
+    // a safety stop is applied, not proposed: a team wallet sells, distribution goes off
+    h.ledger.recordInsiderSell({ projectId: "d1", wallet: "TeamWallet111111111111111111111111111111111", ts: h.now(), txSig: "sig1", amount: 1000n });
+    h.advance(DESK_INTERVAL_MS);
+    await h.runner.tick();
+    expect(h.runner.cfg.strategy.distribution.enabled).toBe(false);
+    expect(h.ledger.listEvents("d1", { types: ["desk_decision"], limit: 50 }).map((e) => e.data.kind)).toContain("set_pace");
   });
 
   it("a founder change saved between the desk's read and its write is kept, and the desk re-decides on it", async () => {
     let fileVersion: ProjectConfig | undefined;
     const h = harness(cfg(), { reload: (id) => fileVersion ?? h.ledger.getProject(id)! });
-    await h.runner.tick();
+    await warm(h);
     fileVersion = {
       ...h.runner.cfg,
+      rules: { ...h.runner.cfg.rules, dailySellCapPct: 0.2 },
       strategy: { ...h.runner.cfg.strategy, defense: { ...h.runner.cfg.strategy.defense, levels: [...h.runner.cfg.strategy.defense.levels, level(0.0001, 1, { pinned: true })] } },
       mandate: { ...h.runner.cfg.mandate!, profile: "protect" },
     };
@@ -449,12 +635,16 @@ describe("desk manager in the runner", () => {
     await h.runner.tick();
     expect(h.runner.cfg.strategy.defense.levels.some((l) => l.pinned && l.price === 0.0001)).toBe(true);
     expect(h.runner.cfg.mandate?.profile).toBe("protect");
+    expect(h.runner.cfg.rules.dailySellCapPct).toBe(0.2);
+    expect(h.runner.cfg.strategy.distribution.pctOfVaultPerDay).toBeLessThanOrEqual(0.2);
     expect(h.saved[h.saved.length - 1]!.strategy.defense.levels.some((l) => l.pinned)).toBe(true);
   });
 
   it("a lost level forces a desk run (not closer than a minute), and a confirmed liquidity pull pauses the project", async () => {
     const h = harness(cfg());
-    await h.runner.tick();
+    await warm(h);
+    h.advance(DESK_INTERVAL_MS);
+    await h.runner.tick(); // a desk run just happened
     const top = h.runner.cfg.strategy.defense.levels[0]!.price;
     h.advance(10_000);
     h.feed.price = top * 0.8;
@@ -463,8 +653,8 @@ describe("desk manager in the runner", () => {
     h.advance(DESK_FORCE_MIN_MS);
     await h.runner.tick();
     expect(h.runner.cfg.strategy.defense.levels.some((l) => l.price === top)).toBe(false);
-    for (let i = 0; i < 12; i++) {
-      h.advance(5 * MINUTE);
+    for (let i = 0; i < 60; i++) {
+      h.advance(MINUTE);
       await h.runner.tick();
     }
     h.feed.liquidity = 40;
@@ -483,7 +673,7 @@ describe("desk manager in the runner", () => {
 
   it("budget low forces one desk run, not one per tick", async () => {
     const h = harness(cfg(mandate(), { rules: { defenseBudgetSol: 1, maxDefenseSpendPerDaySol: 1 } }));
-    await h.runner.tick();
+    await warm(h);
     const runs = () => h.ledger.listEvents("d1", { types: ["desk_decision", "desk_escalation"], limit: 500 }).length;
     const after1 = runs();
     for (let i = 0; i < 30; i++) {

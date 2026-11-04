@@ -319,6 +319,24 @@ describe("REB inventory rebalance", () => {
     expect(p[0]!.amountIn).toBe(solToLamports(6.25));
   });
 
+  it("under a mandate a rebalance sell obeys the stops that hold distribution; buys are unaffected", () => {
+    const sellCfg = testConfig({ rules: { dailySellCapPct: 20 }, strategy: { rebalance: { enabled: true, targetSolShare: 0.5, band: 0.1 }, clip: { maxSol: 50 } } });
+    const mandate = { profile: "balanced" as const, autonomy: "auto" as const, startedAt: 0 };
+    // distribution switched off by the desk (team-wallet sell, own share, liquidity, target reached): no REB sell
+    expect(proposeRebalance(baseInput({ cfg: { ...sellCfg, mandate, strategy: { ...sellCfg.strategy, distribution: { ...sellCfg.strategy.distribution, enabled: false } } } }))).toEqual([]);
+    // under the mandate's alert line: no REB sell
+    const on = { ...sellCfg, mandate: { ...mandate, alertFloor: 0.0003 }, strategy: { ...sellCfg.strategy, distribution: { ...sellCfg.strategy.distribution, enabled: true } } };
+    expect(proposeRebalance(baseInput({ cfg: on }))).toEqual([]);
+    // distribution on and price above the line: the sell goes through
+    const ok = { ...on, mandate: { ...mandate, alertFloor: 0.0001 } };
+    expect(proposeRebalance(baseInput({ cfg: ok }))).toHaveLength(1);
+    // without a mandate the founder's explicit rebalance setting stands on its own
+    expect(proposeRebalance(baseInput({ cfg: sellCfg }))).toHaveLength(1);
+    // a buy (too much SOL) is not a distribution and is never held by these stops
+    const buyCfg = testConfig({ strategy: { rebalance: { enabled: true, targetSolShare: 0.1, band: 0.05 }, clip: { maxSol: 50 } } });
+    expect(proposeRebalance(baseInput({ cfg: { ...buyCfg, mandate: { ...mandate, alertFloor: 0.0003 } } }))[0]?.side).toBe("buy");
+  });
+
   it("waits ten minutes between orders", () => {
     const cfg = testConfig({ strategy: { rebalance: { enabled: true, targetSolShare: 0.1, band: 0.05 } } });
     const now = 1_000_000_000_000;
