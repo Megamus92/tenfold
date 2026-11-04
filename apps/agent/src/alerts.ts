@@ -217,6 +217,7 @@ export function formatEvent(ev: EngineEvent, cfg: ProjectConfig, ledger: LedgerR
       const kind = s(d, "kind");
       // The desk already wrote the sentence; prefix it so the founder knows who acted and that nothing is asked of him.
       if (kind === "mandate_started") return undefined; // bookkeeping, the status shows it
+      if (kind === "pause") return undefined; // the paused event and the escalation already carry this sentence
       return `Desk: ${why}`;
     }
     case "desk_proposal": {
@@ -238,8 +239,7 @@ export function formatEvent(ev: EngineEvent, cfg: ProjectConfig, ledger: LedgerR
       return `${head} ${why}${options.length ? ` Options: ${options.join(" / ")}.` : ""}`;
     }
     case "weekly_report": {
-      const r = ledger.dailyReport(cfg.id, ev.ts); // shape only; the real numbers come in the event data
-      const week = { ...r, ...weekFromEvent(d, r) };
+      const week = weekFromEvent(d, cfg.id, ev.ts);
       return formatDailyReport(week, cfg, reportExtrasFrom(d)).replace(/^.*?: 24h report/, `${cfg.name}: 7-day report`);
     }
     case "order_proposed":
@@ -250,19 +250,30 @@ export function formatEvent(ev: EngineEvent, cfg: ProjectConfig, ledger: LedgerR
   }
 }
 
-/** The weekly event carries a period report serialised with bigints as strings; coerce the fields the formatter reads. */
-function weekFromEvent(d: Data, fallback: ReturnType<LedgerReads["dailyReport"]>): Partial<ReturnType<LedgerReads["dailyReport"]>> {
-  const out: Record<string, unknown> = {};
-  for (const k of ["soldTokens", "soldProceedsLamports", "boughtTokens", "boughtCostLamports", "defenseLamports", "feesLamports", "vaultTokens", "vaultLamports"] as const) {
-    const v = big(d, k);
-    if (v !== undefined) out[k] = v;
-  }
-  for (const k of ["from", "to", "fills", "priceOpen", "priceClose", "tokenVwap", "distributionVwap", "distributionVsTokenBps"] as const) {
+/** The weekly event carries a period report serialised with bigints as strings; rebuild it from the event alone (zeros for anything missing). */
+function weekFromEvent(d: Data, projectId: string, ts: number): ReturnType<LedgerReads["dailyReport"]> {
+  const out: ReturnType<LedgerReads["dailyReport"]> = {
+    projectId,
+    from: n(d, "from") ?? ts - 7 * 86_400_000,
+    to: n(d, "to") ?? ts,
+    fills: n(d, "fills") ?? 0,
+    byReason: d["byReason"] && typeof d["byReason"] === "object" ? (d["byReason"] as Record<string, number>) : {},
+    soldTokens: big(d, "soldTokens") ?? 0n,
+    soldProceedsLamports: big(d, "soldProceedsLamports") ?? 0n,
+    boughtTokens: big(d, "boughtTokens") ?? 0n,
+    boughtCostLamports: big(d, "boughtCostLamports") ?? 0n,
+    defenseLamports: big(d, "defenseLamports") ?? 0n,
+    feesLamports: big(d, "feesLamports") ?? 0n,
+  };
+  for (const k of ["priceOpen", "priceClose", "tokenVwap", "distributionVwap", "distributionVsTokenBps"] as const) {
     const v = n(d, k);
     if (v !== undefined) out[k] = v;
   }
-  if (d["byReason"] && typeof d["byReason"] === "object") out.byReason = d["byReason"];
-  return { ...fallback, ...out } as Partial<ReturnType<LedgerReads["dailyReport"]>>;
+  const vt = big(d, "vaultTokens");
+  const vl = big(d, "vaultLamports");
+  if (vt !== undefined) out.vaultTokens = vt;
+  if (vl !== undefined) out.vaultLamports = vl;
+  return out;
 }
 
 export interface AlertPollerOptions {

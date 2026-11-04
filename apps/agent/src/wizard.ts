@@ -16,10 +16,9 @@ export const PROFILE_LABELS: Record<MandateProfile, string> = { protect: "Protec
 /** Share/horizon presets offered after the profile; the founder can type anything else later. */
 export const SHARE_PRESETS: { pct: number; days: number }[] = [
   { pct: 10, days: 30 },
-  { pct: 25, days: 30 },
-  { pct: 50, days: 60 },
-  { pct: 100, days: 60 },
-  { pct: 100, days: 90 },
+  { pct: 25, days: 60 },
+  { pct: 50, days: 100 },
+  { pct: 100, days: 200 },
 ];
 
 interface WizardState {

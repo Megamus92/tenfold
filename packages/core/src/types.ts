@@ -49,6 +49,8 @@ export interface DefenseLevel {
   budgetSol: number;
   /** Set by the founder himself (through the agent): the desk manager never moves or removes a pinned level. */
   pinned?: boolean;
+  /** When the desk placed this level (ms). Only DEF orders after this count against its budget, so a re-placed level starts fresh. */
+  placedAt?: number;
 }
 
 export interface StrategyConfig {
@@ -119,6 +121,8 @@ export interface Mandate {
   startedAt: number;
   /** Vault token balance at mandate start (base units, decimal string), the base for `distributePct`. Filled by the desk on first run. */
   startTokens?: string;
+  /** The founder accepted that the daily cap makes the horizon longer; the desk stops raising it. */
+  acceptedSlowPace?: boolean;
 }
 
 export interface ProjectConfig {

@@ -42,7 +42,7 @@ import {
   levelTag,
 } from "@tenfold/strategies";
 import type { Proposal, Strategy, StrategyInput } from "@tenfold/strategies";
-import { DESK_INTERVAL_MS, decide, strategyChanged } from "./desk.js";
+import { DESK_FORCE_MIN_MS, DESK_INTERVAL_MS, decide, strategyChanged } from "./desk.js";
 import type { DeskEscalation } from "./desk.js";
 
 const MINUTE = 60_000;
@@ -54,6 +54,8 @@ const RECENT_PRICES_WINDOW = 15 * MINUTE;
 const DAILY_REPORT_HOUR = 9;
 /** Local day of week (0 = Sunday) on which the weekly report goes out, with the daily one. */
 const WEEKLY_REPORT_DOW = 1;
+/** A `reload` command is retried this many ticks before it is marked failed. */
+const RELOAD_MAX_ATTEMPTS = 5;
 
 /** The feed contract the runner needs (structurally identical to @tenfold/exec's PriceFeed). */
 export interface PriceFeed {
@@ -135,10 +137,15 @@ export class ProjectRunner {
   private lastDeskRun = 0;
   private lastLevelChangeAt?: number;
   private lastPaceChangeAt?: number;
+  private lastLevelRemovedAt?: number;
   /** Timestamps of levels the desk declared lost (last 24h). */
   private lostLevelTimes: number[] = [];
   private lastEscalation = new Map<string, number>();
   private deskForce = false;
+  private budgetLowSeen = false;
+  /** In `ask` mode, the fingerprint and time of the last proposal batch, so the same proposal is not repeated. */
+  private lastProposal?: { key: string; at: number };
+  private commandAttempts = new Map<string, number>();
   private seeded = false;
 
   constructor(deps: RunnerDeps) {
@@ -454,9 +461,10 @@ export class ProjectRunner {
         }
         case "reload": {
           // The agent already saved the file and upserted the ledger row; we only swap our in-memory config.
-          const fresh = loadProject(this.cfg.id);
+          const fresh = this.reloadConfig ? this.reloadConfig(this.cfg.id) : loadProject(this.cfg.id);
           const changed = diffKeys(this.cfg, fresh);
           this.cfg = fresh;
+          this.deskForce = true; // the desk re-decides on the founder's new settings at the next tick
           if (changed.length > 0) this.emit("config_changed", now, { source: "engine", changed, commandId: cmd.id });
           break;
         }
@@ -464,8 +472,18 @@ export class ProjectRunner {
           throw new Error(`unknown command type ${cmd.type}`);
       }
       this.ledger.completeCommand(cmd.id);
+      this.commandAttempts.delete(cmd.id);
       logger.info("command applied", { project: this.cfg.id, type: cmd.type, id: cmd.id });
     } catch (e) {
+      // A reload that fails (file mid-write, transient parse error) is retried on the next ticks before giving up,
+      // so the founder's "Confirmed." never silently stays unapplied.
+      const attempts = (this.commandAttempts.get(cmd.id) ?? 0) + 1;
+      this.commandAttempts.set(cmd.id, attempts);
+      if (cmd.type === "reload" && attempts < RELOAD_MAX_ATTEMPTS) {
+        logger.warn("command failed, will retry", { project: this.cfg.id, type: cmd.type, id: cmd.id, attempt: attempts, err: errMsg(e) });
+        return;
+      }
+      this.commandAttempts.delete(cmd.id);
       this.ledger.completeCommand(cmd.id, errMsg(e));
       logger.error("command failed", { project: this.cfg.id, type: cmd.type, id: cmd.id, err: errMsg(e) });
     }
@@ -518,8 +536,11 @@ export class ProjectRunner {
 
     const budget = detectBudgetLow(this.cfg, rolling);
     if (budget.low) {
-      if (this.cfg.mandate) this.deskForce = true;
+      if (this.cfg.mandate && !this.budgetLowSeen) this.deskForce = true;
+      this.budgetLowSeen = true;
       this.emit("budget_low", now, { leftSol: budget.remainingSol, budgetSol: budget.totalSol, pct: budget.remainingPct }, "budget_low", 6 * HOUR);
+    } else {
+      this.budgetLowSeen = false;
     }
 
     const cap = detectCapReached(this.cfg, snapshot, rolling);
@@ -564,7 +585,7 @@ export class ProjectRunner {
     const target = (start * BigInt(Math.round(distributePct * 100))) / 10_000n;
     const distributed = this.ledger
       .listFills(this.cfg.id, { since: m.startedAt, limit: 100_000 })
-      .filter((f) => f.side === "sell" && f.reason === "DIST")
+      .filter((f) => f.side === "sell")
       .reduce((a, f) => a + f.inAmount, 0n);
     const donePct = target > 0n ? Math.min(100, (Number(distributed) / Number(target)) * 100) : 0;
     const elapsedPct = Math.min(100, Math.max(0, ((now - m.startedAt) / (horizonDays * DAY)) * 100));
@@ -574,22 +595,28 @@ export class ProjectRunner {
   // ---------- desk manager ----------
 
   /**
-   * Let the desk re-evaluate the strategy: every DESK_INTERVAL_MS, or at once when a detector flagged something
-   * (level lost, sell pressure, budget low). Decisions are applied and announced in `auto`, announced only in `ask`.
+   * Let the desk re-evaluate the strategy: every DESK_INTERVAL_MS, or sooner when a detector flagged something
+   * (level lost, sell pressure, budget low, config reload), never closer than DESK_FORCE_MIN_MS. In `auto` the
+   * decisions are applied and announced; in `ask` only bookkeeping and the safety pause are applied, strategy
+   * changes are proposed once (not repeated) until the founder acts.
    */
   private runDesk(snapshot: Snapshot, rolling: RollingState, now: number): void {
     const mandate = this.cfg.mandate;
-    if (!mandate) return;
-    if (!this.deskForce && now - this.lastDeskRun < DESK_INTERVAL_MS) return;
+    if (!mandate || this.cfg.paused) return;
+    const since = now - this.lastDeskRun;
+    if (since < DESK_INTERVAL_MS && !(this.deskForce && since >= DESK_FORCE_MIN_MS)) return;
     this.deskForce = false;
     this.lastDeskRun = now;
     try {
       const lookbackMs = Math.max(HOUR, 6 * HOUR);
-      const history = this.ledger.snapshotsSince(this.cfg.id, now - lookbackMs, 5000).filter((s) => s.ts < now);
-      const distributed = this.ledger
-        .listFills(this.cfg.id, { since: mandate.startedAt, limit: 100_000 })
-        .filter((f) => f.side === "sell" && f.reason === "DIST")
-        .reduce((a, f) => a + f.inAmount, 0n);
+      const history = this.ledger.snapshotsSince(this.cfg.id, now - lookbackMs, 5000, now - 1);
+      const history24h = downsample(this.ledger.snapshotsSince(this.cfg.id, now - DAY, 20_000, now - 1), 288);
+      const fillsSinceStart = this.ledger.listFills(this.cfg.id, { since: mandate.startedAt, limit: 100_000 });
+      // Every own sell counts toward the mandate's share: a rebalance sell is distribution by another name.
+      const distributed = fillsSinceStart.filter((f) => f.side === "sell").reduce((a, f) => a + f.inAmount, 0n);
+      const fills24h = fillsSinceStart.filter((f) => f.ts >= now - DAY);
+      const defense24h = fills24h.filter((f) => f.side === "buy" && f.reason === "DEF").reduce((a, f) => ({ spentLamports: a.spentLamports + f.inAmount, tokensBought: a.tokensBought + f.outAmount }), { spentLamports: 0n, tokensBought: 0n });
+      const ownVolume24hSol = fills24h.reduce((a, f) => a + lamportsToSol(f.side === "buy" ? f.inAmount : f.outAmount), 0);
       const insiderSellRecent = this.ledger.listInsiderSells(this.cfg.id, now - DAY, 1).length > 0;
       this.lostLevelTimes = this.lostLevelTimes.filter((t) => t > now - DAY);
       const out = decide({
@@ -598,34 +625,69 @@ export class ProjectRunner {
         rolling,
         now,
         history,
+        history24h,
         recentOrders: this.recentOrders,
         distributedSinceStart: distributed,
+        defense24h,
+        ownVolume24hSol,
         insiderSellRecent,
         lastLevelChangeAt: this.lastLevelChangeAt,
+        lastLevelRemovedAt: this.lastLevelRemovedAt,
         lastPaceChangeAt: this.lastPaceChangeAt,
         lostLevelsLast24h: this.lostLevelTimes.length,
         lastLostAt: this.lostLevelTimes[this.lostLevelTimes.length - 1],
       });
 
-      const changed = strategyChanged(this.cfg.strategy, out.strategy) || JSON.stringify(out.mandate) !== JSON.stringify(mandate) || out.pause !== undefined;
-      if (changed && out.decisions.length > 0) {
-        if (mandate.autonomy === "auto") {
-          const fresh = this.reloadConfig ? this.reloadConfig(this.cfg.id) : this.cfg;
-          // Pinned levels and the founder's rules are taken from the fresh file; the desk only owns strategy + mandate bookkeeping.
-          this.cfg = { ...fresh, strategy: out.strategy, mandate: out.mandate };
-          if (out.pause) this.cfg = { ...this.cfg, paused: true };
-          this.persistConfig(this.cfg);
-          this.ledger.upsertProject(this.cfg);
-          if (out.decisions.some((d) => d.change.kind === "place_level" || d.change.kind === "move_level")) this.lastLevelChangeAt = now;
-          if (out.decisions.some((d) => d.change.kind === "set_pace")) this.lastPaceChangeAt = now;
-          for (const d of out.decisions) if (d.change.kind === "remove_level" && d.change.cause === "lost") this.lostLevelTimes.push(now);
-          for (const d of out.decisions) this.emit("desk_decision", now, { ...d.change, why: d.why });
-          if (out.pause) this.emit("paused", now, { by: "desk", why: out.pause.why });
-        } else {
-          for (const d of out.decisions) this.emit("desk_proposal", now, { ...d.change, why: d.why });
-        }
-        logger.info("desk", { project: this.cfg.id, autonomy: mandate.autonomy, decisions: out.decisions.map((d) => d.change.kind) });
+      const strategyDiffers = strategyChanged(this.cfg.strategy, out.strategy);
+      const mandateDiffers = JSON.stringify(out.mandate) !== JSON.stringify(mandate);
+      if (out.decisions.length === 0 && !strategyDiffers && !mandateDiffers && !out.pause) {
+        for (const e of out.escalations) this.escalate(e, now);
+        return;
       }
+
+      // The desk decided on the config it was handed. If the file changed meanwhile (the agent saved a founder
+      // change), that decision is stale: adopt the founder's version and decide again on the next tick.
+      const fresh = this.reloadConfig ? this.reloadConfig(this.cfg.id) : this.cfg;
+      if (JSON.stringify(fresh.strategy) !== JSON.stringify(this.cfg.strategy) || JSON.stringify(fresh.mandate) !== JSON.stringify(this.cfg.mandate) || fresh.paused !== this.cfg.paused) {
+        logger.info("desk: project file changed under it, re-deciding next tick", { project: this.cfg.id });
+        this.cfg = fresh;
+        this.deskForce = true;
+        this.lastDeskRun = now - DESK_INTERVAL_MS; // not throttled
+        return;
+      }
+
+      const applyStrategy = mandate.autonomy === "auto";
+      const next: ProjectConfig = {
+        ...fresh,
+        mandate: out.mandate, // bookkeeping (startTokens) is applied whatever the autonomy
+        strategy: applyStrategy ? out.strategy : fresh.strategy,
+        paused: out.pause ? true : fresh.paused, // the safety stop is applied whatever the autonomy
+      };
+      const bookkeepingOnly = !applyStrategy && !out.pause;
+      const changed = JSON.stringify(next) !== JSON.stringify(this.cfg);
+      if (changed) {
+        this.cfg = next;
+        this.persistConfig(this.cfg);
+        this.ledger.upsertProject(this.cfg);
+      }
+      if (applyStrategy) {
+        if (out.decisions.some((d) => d.change.kind === "place_level" || d.change.kind === "move_level")) this.lastLevelChangeAt = now;
+        if (out.decisions.some((d) => d.change.kind === "remove_level")) this.lastLevelRemovedAt = now;
+        if (out.decisions.some((d) => d.change.kind === "set_pace")) this.lastPaceChangeAt = now;
+        for (const d of out.decisions) if (d.change.kind === "remove_level" && d.change.cause === "lost") this.lostLevelTimes.push(now);
+        for (const d of out.decisions) this.emit("desk_decision", now, { ...d.change, why: d.why });
+      } else {
+        const proposals = out.decisions.filter((d) => d.change.kind !== "mandate_started" && d.change.kind !== "pause");
+        const key = JSON.stringify(proposals.map((d) => d.change));
+        const repeat = this.lastProposal && this.lastProposal.key === key && now - this.lastProposal.at < 6 * HOUR;
+        if (proposals.length > 0 && !repeat) {
+          this.lastProposal = { key, at: now };
+          for (const d of proposals) this.emit("desk_proposal", now, { ...d.change, why: d.why });
+        }
+        void bookkeepingOnly;
+      }
+      if (out.pause) this.emit("paused", now, { by: "desk", why: out.pause.why });
+      logger.info("desk", { project: this.cfg.id, autonomy: mandate.autonomy, decisions: out.decisions.map((d) => d.change.kind) });
       for (const e of out.escalations) this.escalate(e, now);
     } catch (e) {
       logger.error("desk failed", { project: this.cfg.id, err: errMsg(e) });
@@ -668,6 +730,8 @@ export class ProjectRunner {
     if (placed) this.lastLevelChangeAt = placed.ts;
     const paced = deskEvents.find((ev) => ev.data.kind === "set_pace");
     if (paced) this.lastPaceChangeAt = paced.ts;
+    const removed = deskEvents.find((ev) => ev.data.kind === "remove_level");
+    if (removed) this.lastLevelRemovedAt = removed.ts;
     this.lostLevelTimes = deskEvents
       .filter((ev) => ev.data.kind === "remove_level" && ev.data.cause === "lost")
       .map((ev) => ev.ts)
@@ -731,4 +795,14 @@ export function outcomeUnknown(e: unknown): boolean {
   if (typeof e !== "object" || e === null) return false;
   const o = e as { txSig?: unknown; outcomeUnknown?: unknown };
   return typeof o.txSig === "string" && o.txSig !== "" && o.outcomeUnknown === true;
+}
+
+/** Keep at most `max` evenly spaced items of an oldest-first series (the last item is always kept). */
+export function downsample<T>(xs: T[], max: number): T[] {
+  if (xs.length <= max || max <= 0) return xs;
+  const step = xs.length / max;
+  const out: T[] = [];
+  for (let i = 0; i < max; i++) out.push(xs[Math.min(xs.length - 1, Math.floor(i * step))]!);
+  if (out[out.length - 1] !== xs[xs.length - 1]) out.push(xs[xs.length - 1]!);
+  return out;
 }

@@ -70,6 +70,8 @@ export function isLevelOrder(o: Order, level: DefenseLevel): boolean {
 export function levelSpentLamports(orders: Order[], level: DefenseLevel): bigint {
   let sum = 0n;
   for (const o of orders) {
+    // A level re-placed at the same price starts fresh: only orders after its placement count.
+    if (level.placedAt !== undefined && o.createdAt < level.placedAt) continue;
     if (o.side === "buy" && COMMITTED.includes(o.status) && isLevelOrder(o, level)) sum += o.amountIn;
   }
   return sum;

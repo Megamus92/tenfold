@@ -2,10 +2,14 @@
 export type Level = "debug" | "info" | "warn" | "error";
 
 const order: Record<Level, number> = { debug: 10, info: 20, warn: 30, error: 40 };
-const minLevel: Level = (process.env.TENFOLD_LOG_LEVEL as Level) ?? "info";
+/** Read at every call so a process can lower or raise verbosity after import (the backtest's quiet mode does). */
+function minLevel(): Level {
+  const raw = process.env.TENFOLD_LOG_LEVEL;
+  return raw && raw in order ? (raw as Level) : "info";
+}
 
 export function log(level: Level, msg: string, fields: Record<string, unknown> = {}): void {
-  if (order[level] < order[minLevel]) return;
+  if (order[level] < order[minLevel()]) return;
   const line = JSON.stringify(
     { t: new Date().toISOString(), level, msg, ...fields },
     (_k, v) => (typeof v === "bigint" ? v.toString() : v),

@@ -103,11 +103,14 @@ export function createBot(deps: BotDeps): { bot: Bot<Context>; bindings: Binding
   wizard.register(bot);
   const brains = new Map<string, Brain>();
 
+  // One Brain per project AND per set of baked-in facts, so a mandate change or going live is seen at once.
   const brainFor = (cfg: ProjectConfig): Brain => {
-    let b = brains.get(cfg.id);
+    const key = `${cfg.id}|${cfg.mode}|${JSON.stringify(cfg.mandate ?? null)}|${cfg.rules.withdrawalDelayHours}`;
+    let b = brains.get(key);
     if (!b) {
+      for (const k of brains.keys()) if (k.startsWith(`${cfg.id}|`)) brains.delete(k);
       b = new Brain(deps.anthropic, deps.model, systemPromptFor(cfg));
-      brains.set(cfg.id, b);
+      brains.set(key, b);
     }
     return b;
   };
@@ -306,7 +309,7 @@ export function createBot(deps: BotDeps): { bot: Bot<Context>; bindings: Binding
     const e = err.error;
     const fields: Record<string, unknown> = { update: err.ctx.update.update_id, chatId: chatIdOf(err.ctx) };
     if (e instanceof GrammyError) fields.telegram = e.description;
-    else if (e instanceof HttpError) fields.http = String(e.error);
+    else if (e instanceof HttpError) fields.http = maskToken(String(e.error));
     else if (e instanceof Error) {
       fields.error = e.message;
       fields.stack = e.stack;
@@ -320,6 +323,11 @@ export function createBot(deps: BotDeps): { bot: Bot<Context>; bindings: Binding
   });
 
   return { bot, bindings, confirmStore };
+}
+
+/** A Telegram API URL embeds the bot token; never let it reach a log line. */
+export function maskToken(text: string): string {
+  return text.replace(/bot\d+:[A-Za-z0-9_-]+/g, "bot<token>");
 }
 
 /** Constant-time string compare that never throws on length mismatch. */

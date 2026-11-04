@@ -34,6 +34,8 @@ export interface MandateInput {
   distributePct?: number;
   /** 0 removes the alert floor. */
   alertFloor?: number;
+  /** The founder accepts that the daily cap stretches the horizon; stops the reminder. */
+  acceptSlowPace?: boolean;
 }
 
 export type PostStatusFilter = "draft" | "approved" | "posted" | "failed" | "rejected" | "all";
@@ -59,6 +61,7 @@ export const CONFIRMED_TOOLS: ReadonlySet<ToolName> = new Set<ToolName>([
   "manual_order",
   "approve_post",
   "set_marketing",
+  "set_mandate",
 ]);
 
 const price = { type: "number", exclusiveMinimum: 0, description: "Price in SOL per whole token, e.g. 0.00021." };
@@ -90,7 +93,7 @@ export const TOOLS: Tool[] = [
   {
     name: "set_distribution",
     description:
-      "Configure distribution, the programme that sells a small share of the vault every day into real buy flow. enabled turns it on or off; pctOfVaultPerDay is the target share of the vault's tokens to sell per day and is clamped to the rules' daily sell cap (the tool tells you when it clamps, and the cap itself can only be raised through request_raise_daily_cap with a 48h delay); mode 'strength' sells only when buyers dominate, 'twap' spreads sells evenly over the day; minPrice is a floor below which distribution never sells (omit it to keep the current floor, send 0 to remove the floor). The founder confirms with a button before anything applies.",
+      "Configure distribution, the programme that sells a small share of the vault every day into real buy flow. enabled turns it on or off; pctOfVaultPerDay is the target share of the vault's tokens to sell per day and is clamped to the rules' daily sell cap (the tool tells you when it clamps, and the cap itself can only be raised through request_raise_daily_cap with a 48h delay); mode 'strength' sells only when buyers dominate, 'twap' spreads sells evenly over the day; minPrice is a floor below which distribution never sells (omit it to keep the current floor, send 0 to remove the floor). The founder confirms with a button before anything applies. On a project with a mandate the desk sets the pace, mode and boost itself: only the floor (minPrice) can be changed here; to stop selling set the mandate's share to 0 with set_mandate.",
     input_schema: {
       type: "object",
       properties: {
@@ -245,6 +248,7 @@ export const TOOLS: Tool[] = [
         horizonDays: { type: "number", minimum: 1, maximum: 365, description: "Days over which distributePct of the vault should be sold." },
         distributePct: { type: "number", minimum: 0, maximum: 100, description: "Share of the vault's tokens to distribute over the horizon, in %." },
         alertFloor: { type: "number", minimum: 0, description: "Price (SOL per token) under which to tell the founder. 0 removes it." },
+        acceptSlowPace: { type: "boolean", description: "true when the founder accepts that the daily cap makes the horizon longer; the desk stops reminding." },
       },
       additionalProperties: false,
     },
@@ -383,7 +387,8 @@ export function parseToolCall(name: string, input: unknown): Parsed {
       if (o["distributePct"] !== undefined && (distributePct === undefined || distributePct < 0 || distributePct > 100)) return { error: "distributePct must be between 0 and 100." };
       const alertFloor = num(o, "alertFloor");
       if (o["alertFloor"] !== undefined && (alertFloor === undefined || alertFloor < 0)) return { error: "alertFloor must be a number >= 0 (0 removes it)." };
-      if (profile === undefined && autonomy === undefined && horizonDays === undefined && distributePct === undefined && alertFloor === undefined) return { error: "Give at least one field to change." };
+      const acceptSlowPace = bool(o, "acceptSlowPace");
+      if (profile === undefined && autonomy === undefined && horizonDays === undefined && distributePct === undefined && alertFloor === undefined && acceptSlowPace === undefined) return { error: "Give at least one field to change." };
       return {
         name,
         input: {
@@ -392,6 +397,7 @@ export function parseToolCall(name: string, input: unknown): Parsed {
           ...(horizonDays !== undefined ? { horizonDays } : {}),
           ...(distributePct !== undefined ? { distributePct } : {}),
           ...(alertFloor !== undefined ? { alertFloor } : {}),
+          ...(acceptSlowPace !== undefined ? { acceptSlowPace } : {}),
         },
       };
     }

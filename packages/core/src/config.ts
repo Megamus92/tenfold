@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import type { FeeTerms, ProjectConfig } from "./types.js";
 
@@ -18,7 +18,7 @@ export const VaultRulesSchema = z.object({
 export const StrategyConfigSchema = z.object({
   defense: z.object({
     enabled: z.boolean(),
-    levels: z.array(z.object({ price: z.number().positive(), budgetSol: z.number().min(0), pinned: z.boolean().optional() })),
+    levels: z.array(z.object({ price: z.number().positive(), budgetSol: z.number().min(0), pinned: z.boolean().optional(), placedAt: z.number().optional() })),
     maxDistanceBelowPct: z.number().min(1).max(90).optional(),
   }),
   distribution: z.object({
@@ -48,6 +48,7 @@ export const MandateSchema = z.object({
   alertFloor: z.number().positive().optional(),
   startedAt: z.number(),
   startTokens: z.string().regex(/^\d+$/).optional(),
+  acceptedSlowPace: z.boolean().optional(),
 });
 
 export const ProjectConfigSchema = z.object({
@@ -178,11 +179,15 @@ export function loadAllProjects(): ProjectConfig[] {
     .map((f) => parseProjectConfig(JSON.parse(readFileSync(join(dir, f), "utf8"))));
 }
 
+/** Atomic write: the agent and the engine both save project files, and neither may ever read a half-written one. */
 export function saveProject(cfg: ProjectConfig): void {
   const dir = projectsDir();
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   const validated = parseProjectConfig(cfg);
-  writeFileSync(join(dir, `${validated.id}.json`), JSON.stringify(validated, null, 2) + "\n");
+  const file = join(dir, `${validated.id}.json`);
+  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+  writeFileSync(tmp, JSON.stringify(validated, null, 2) + "\n");
+  renameSync(tmp, file);
 }
 
 export interface Env {

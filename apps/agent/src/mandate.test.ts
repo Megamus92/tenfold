@@ -113,7 +113,7 @@ describe("desk alerts", () => {
       fx.ledger,
     );
     expect(text).toMatch(/Horizon: 38.2% of the 50% target distributed at 36.7% of the 30 days/);
-    expect(text).toMatch(/Desk: 2 levels placed, 1 levels removed, 3 pace changes/);
+    expect(text).toMatch(/Desk: 2 ladders placed, 1 levels removed, 3 pace changes/);
     const quiet = formatEvent({ type: "daily_report", projectId: "test", ts: now, data: { desk: {} } }, fx.cfg, fx.ledger);
     expect(quiet).toMatch(/Desk: no changes needed/);
   });

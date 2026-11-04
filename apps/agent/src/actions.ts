@@ -248,7 +248,7 @@ export function getStatus(ctx: ActionContext): ActionResult {
     `Defense ${defense.enabled ? "ON" : "OFF"}: budget ${fmtSol(defense.budgetSol)} SOL, left ${fmtSol(defense.remainingSol)}, today ${fmtSol(defense.spentTodaySol)}/${fmtSol(defense.maxPerDaySol)}` +
       (defense.costPerHourSol !== undefined ? `, holding costs ~${fmtSol(defense.costPerHourSol)} SOL/h now` : ""),
   );
-  for (const l of defense.levels) lines.push(`  level ${fmtPrice(l.price)}: ${fmtSol(l.budgetSol)} SOL`);
+  for (const l of defense.levels) lines.push(`  level ${fmtPrice(l.price)}: ${fmtSol(l.budgetSol)} SOL${l.pinned ? " (yours, pinned)" : cfg.mandate ? " (desk)" : ""}`);
   const dist = cfg.strategy.distribution;
   lines.push(
     `Distribution ${dist.enabled ? "ON" : "OFF"}: ${fmtPct(dist.pctOfVaultPerDay)}/day, ${dist.mode}` + (dist.minPrice ? `, floor ${fmtPrice(dist.minPrice)}` : ""),
@@ -332,8 +332,8 @@ export interface ReportExtras {
 }
 
 const DESK_KIND_LABELS: Record<string, string> = {
-  place_level: "levels placed",
-  move_level: "levels trailed up",
+  place_level: "ladders placed",
+  move_level: "ladders trailed up",
   remove_level: "levels removed",
   set_pace: "pace changes",
   set_boost: "boost set",
@@ -410,6 +410,9 @@ export function setDefenseLevel(ctx: ActionContext, input: { price: number; budg
 
   if (input.action === "remove") {
     if (!existing) return { ok: false, message: `There is no defense level at ${fmtPrice(input.price)}.` };
+    if (cfg.mandate && !existing.pinned) {
+      return { ok: false, message: `The level at ${fmtPrice(input.price)} is the desk's: it would re-place it within minutes. To stop defending, lower the defense budget (set_defense_budget) or pause; to defend elsewhere, add your own level.` };
+    }
     return {
       ok: true,
       message: "Awaiting confirmation.",
@@ -420,7 +423,8 @@ export function setDefenseLevel(ctx: ActionContext, input: { price: number; budg
             ctx,
             (c) => {
               c.strategy.defense.levels = c.strategy.defense.levels.filter((l) => !same(l));
-              if (c.strategy.defense.levels.length === 0) c.strategy.defense.enabled = false;
+              // Without a mandate the founder is the only source of levels; with one the desk keeps defense on.
+              if (c.strategy.defense.levels.length === 0 && !c.mandate) c.strategy.defense.enabled = false;
               return undefined;
             },
             { defense: { removed: input.price } },
@@ -486,6 +490,32 @@ export function setDistribution(
   const pct = clamped ? cap : input.pctOfVaultPerDay;
   const current = ctx.cfg.strategy.distribution;
   const floor = input.minPrice === undefined ? current.minPrice : input.minPrice > 0 ? input.minPrice : undefined;
+  if (ctx.cfg.mandate) {
+    // The desk owns pace, mode and boost under a mandate; a founder change there would be undone within the hour.
+    if (input.minPrice === undefined || floor === current.minPrice) {
+      return {
+        ok: false,
+        message: "This project runs on a mandate: the desk sets the pace, mode and boost itself. To stop selling, set the mandate's share to 0 (set_mandate distributePct 0); to sell more or faster, change the mandate's share or horizon. Only the floor (minPrice) can be changed here.",
+      };
+    }
+    return {
+      ok: true,
+      message: "Awaiting confirmation.",
+      needsConfirmation: {
+        summary: floor ? `Set the selling floor to ${fmtPrice(floor)}: the desk never sells under it.` : "Remove the selling floor.",
+        apply: () =>
+          persist(
+            ctx,
+            (c) => {
+              if (floor) c.strategy.distribution.minPrice = floor;
+              else delete c.strategy.distribution.minPrice;
+              return undefined;
+            },
+            { distribution: { minPrice: floor ?? null } },
+          ),
+      },
+    };
+  }
   const summary =
     (input.enabled ? `Turn distribution ON: sell ${fmtPct(pct)} of the vault per day, ${input.mode} mode` : `Turn distribution OFF (settings kept: ${fmtPct(pct)}/day, ${input.mode})`) +
     (floor ? `, floor ${fmtPrice(floor)}` : ", no price floor") +
@@ -854,15 +884,20 @@ export function setMandate(ctx: ActionContext, input: MandateInput): ActionResul
   const now = ctx.now ?? Date.now();
   const profile = input.profile ?? current?.profile;
   if (!profile) return { ok: false, message: "A mandate needs a profile: protect, balanced or distribute." };
+  const horizonDays = input.horizonDays ?? current?.horizonDays;
+  const distributePct = input.distributePct ?? current?.distributePct;
+  // The horizon clock restarts only when what is being distributed changes (profile, share or horizon), not on a
+  // re-sent same value, a floor tweak or an autonomy switch.
+  const restarts = !current || profile !== current.profile || horizonDays !== current.horizonDays || distributePct !== current.distributePct;
   const next = {
     profile,
     autonomy: input.autonomy ?? current?.autonomy ?? ("auto" as const),
-    horizonDays: input.horizonDays ?? current?.horizonDays,
-    distributePct: input.distributePct ?? current?.distributePct,
+    horizonDays,
+    distributePct,
     alertFloor: input.alertFloor === undefined ? current?.alertFloor : input.alertFloor === 0 ? undefined : input.alertFloor,
-    // A new profile or a new horizon restarts the clock; a tweak of the floor or autonomy keeps it.
-    startedAt: current && input.profile === undefined && input.horizonDays === undefined && input.distributePct === undefined ? current.startedAt : now,
-    startTokens: current && input.profile === undefined && input.horizonDays === undefined && input.distributePct === undefined ? current.startTokens : undefined,
+    acceptedSlowPace: input.acceptSlowPace ?? (restarts ? undefined : current?.acceptedSlowPace),
+    startedAt: restarts ? now : current!.startedAt,
+    startTokens: restarts ? undefined : current!.startTokens,
   };
   const changes: string[] = [];
   if (!current) changes.push("new mandate");
@@ -871,14 +906,16 @@ export function setMandate(ctx: ActionContext, input: MandateInput): ActionResul
   if (current && next.horizonDays !== current.horizonDays) changes.push(`horizon ${current.horizonDays ?? "default"} -> ${next.horizonDays ?? "default"} days`);
   if (current && next.distributePct !== current.distributePct) changes.push(`share to distribute ${current.distributePct ?? "default"} -> ${next.distributePct ?? "default"}%`);
   if (current && next.alertFloor !== current.alertFloor) changes.push(`alert floor ${current.alertFloor ?? "none"} -> ${next.alertFloor ?? "none"}`);
+  if (current && (next.acceptedSlowPace ?? false) !== (current.acceptedSlowPace ?? false)) changes.push(next.acceptedSlowPace ? "slower pace accepted" : "slower pace no longer accepted");
   if (changes.length === 0) return { ok: true, message: "The mandate is already like that. Nothing to change." };
   const pace = basePaceLine(next, ctx.cfg.rules.dailySellCapPct);
+  const clock = restarts ? (current ? " The horizon restarts from today." : "") : " The horizon clock keeps running.";
   return {
     ok: true,
     message: "Awaiting confirmation.",
-    data: { current, next },
+    data: { current, next, restarts },
     needsConfirmation: {
-      summary: `Mandate: ${describeMandate(next)}. ${changes.join("; ")}.${pace} Levels you set yourself stay; the desk places and moves its own.`,
+      summary: `Mandate: ${describeMandate(next)}. ${changes.join("; ")}.${pace}${clock} Levels you set yourself stay; the desk places and moves its own.`,
       apply: () =>
         persist(
           ctx,
@@ -891,11 +928,16 @@ export function setMandate(ctx: ActionContext, input: MandateInput): ActionResul
               ...(next.distributePct !== undefined ? { distributePct: next.distributePct } : {}),
               ...(next.alertFloor !== undefined ? { alertFloor: next.alertFloor } : {}),
               ...(next.startTokens !== undefined ? { startTokens: next.startTokens } : {}),
+              ...(next.acceptedSlowPace ? { acceptedSlowPace: true } : {}),
             };
-            const pinned = c.strategy.defense.levels.filter((l) => l.pinned);
-            c.strategy = strategyFromMandate(c.mandate!, c);
-            c.strategy.defense.levels = pinned;
-            if (pinned.length > 0) c.strategy.defense.enabled = true;
+            if (restarts) {
+              // A new distribution plan: rebuild the strategy from the profile, keeping the founder's own levels and floor.
+              const pinned = c.strategy.defense.levels.filter((l) => l.pinned);
+              c.strategy = strategyFromMandate(c.mandate!, c);
+              c.strategy.defense.levels = pinned;
+              if (pinned.length > 0) c.strategy.defense.enabled = true;
+            }
+            // Otherwise the strategy stays as the desk left it; it adapts on its next run.
             return undefined;
           },
           { mandate: next },

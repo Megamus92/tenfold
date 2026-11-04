@@ -279,11 +279,12 @@ export class Ledger {
     return row ? rowToSnapshot(row) : undefined;
   }
 
-  snapshotsSince(projectId: string, since: number, limit = 5000): Snapshot[] {
+  /** Snapshots in [since, until], oldest first. When the limit binds, the NEWEST rows are kept (the recent past matters most). */
+  snapshotsSince(projectId: string, since: number, limit = 5000, until?: number): Snapshot[] {
     const rows = this.db
-      .prepare(`SELECT * FROM snapshots WHERE project_id = ? AND ts >= ? ORDER BY ts ASC LIMIT ?`)
-      .all(projectId, since, limit) as unknown as SnapshotRow[];
-    return rows.map(rowToSnapshot);
+      .prepare(`SELECT * FROM snapshots WHERE project_id = ? AND ts >= ? AND ts <= ? ORDER BY ts DESC LIMIT ?`)
+      .all(projectId, since, until ?? Number.MAX_SAFE_INTEGER, limit) as unknown as SnapshotRow[];
+    return rows.map(rowToSnapshot).reverse();
   }
 
   // ---------- orders ----------
@@ -469,10 +470,11 @@ export class Ledger {
   listEvents(projectId: string, opts: { since?: number; types?: EngineEventType[]; limit?: number } = {}): (EngineEvent & { id: number })[] {
     const since = opts.since ?? 0;
     const limit = opts.limit ?? 200;
-    const rows = this.db
-      .prepare(`SELECT * FROM events WHERE project_id = ? AND ts >= ? ORDER BY ts DESC LIMIT ?`)
-      .all(projectId, since, limit) as unknown as EventRow[];
-    return rows.map(rowToEvent).filter((e) => !opts.types || opts.types.includes(e.type));
+    // The type filter is in SQL so the limit applies to the matching events, not to the newest N of any type.
+    const types = opts.types ?? [];
+    const sql = `SELECT * FROM events WHERE project_id = ? AND ts >= ?` + (types.length ? ` AND type IN (${types.map(() => "?").join(",")})` : "") + ` ORDER BY ts DESC LIMIT ?`;
+    const rows = this.db.prepare(sql).all(projectId, since, ...types, limit) as unknown as EventRow[];
+    return rows.map(rowToEvent);
   }
 
   /** Events the agent has not yet relayed to the founder. */
@@ -790,7 +792,7 @@ export class Ledger {
         if (f.reason === "DEF") defenseLamports += f.inAmount;
       }
     }
-    const snaps = this.snapshotsSince(projectId, dayStart, 100_000);
+    const snaps = this.snapshotsSince(projectId, dayStart, 100_000, dayEnd);
     const first = snaps[0];
     const last = snaps[snaps.length - 1];
     // Token VWAP proxy over the day: average of snapshot prices (flow-weighted when flow is known).
