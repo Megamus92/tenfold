@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { loadProject } from "@tenfold/core";
-import { getStatus, runTool, setDefenseLevel, setMandate } from "./actions.js";
+import { loadProject, saveProject } from "@tenfold/core";
+import { getStatus, runTool, setDefenseLevel, setDistribution, setMandate } from "./actions.js";
 import { formatEvent } from "./alerts.js";
 import { parseToolCall } from "./tools.js";
 import { fixture } from "./testkit.js";
@@ -72,6 +72,59 @@ describe("set_mandate", () => {
     setMandate(ctx(), { profile: "protect" }).needsConfirmation!.apply();
     expect(loadProject("test").mandate!.startedAt).toBeGreaterThanOrEqual(first.startedAt);
     expect(loadProject("test").mandate!.horizonDays).toBe(30);
+  });
+
+  it("re-sending the same profile does not restart the horizon; changing the share does, and says so", () => {
+    setMandate(ctx(), { profile: "balanced", horizonDays: 30, distributePct: 30 }).needsConfirmation!.apply();
+    const first = loadProject("test").mandate!;
+    const same = setMandate(ctx(), { profile: "balanced", autonomy: "ask" });
+    expect(same.needsConfirmation!.summary).toMatch(/clock keeps running/);
+    same.needsConfirmation!.apply();
+    expect(loadProject("test").mandate!.startedAt).toBe(first.startedAt);
+    const changed = setMandate({ ...ctx(), now: first.startedAt + 1000 }, { distributePct: 50 });
+    expect(changed.needsConfirmation!.summary).toMatch(/horizon restarts from today/);
+    changed.needsConfirmation!.apply();
+    expect(loadProject("test").mandate!.startedAt).toBe(first.startedAt + 1000);
+    expect(loadProject("test").mandate!.startTokens).toBeUndefined();
+  });
+
+  it("a floor-only or autonomy-only change keeps the desk's levels and pace", () => {
+    setMandate(ctx(), { profile: "balanced", horizonDays: 60, distributePct: 30 }).needsConfirmation!.apply();
+    const c = loadProject("test");
+    c.strategy.defense.levels = [{ price: 0.00017, budgetSol: 2, placedAt: 1 }];
+    c.strategy.distribution.pctOfVaultPerDay = 0.21;
+    saveProject(c);
+    setMandate(ctx(), { alertFloor: 0.0001 }).needsConfirmation!.apply();
+    const after = loadProject("test");
+    expect(after.strategy.defense.levels).toEqual([{ price: 0.00017, budgetSol: 2, placedAt: 1 }]);
+    expect(after.strategy.distribution.pctOfVaultPerDay).toBe(0.21);
+    expect(after.mandate!.alertFloor).toBe(0.0001);
+  });
+
+  it("accepting the slower pace is recorded on the mandate", () => {
+    setMandate(ctx(), { profile: "distribute", horizonDays: 10, distributePct: 100 }).needsConfirmation!.apply();
+    const res = setMandate(ctx(), { acceptSlowPace: true });
+    expect(res.needsConfirmation!.summary).toMatch(/slower pace accepted/);
+    res.needsConfirmation!.apply();
+    expect(loadProject("test").mandate!.acceptedSlowPace).toBe(true);
+    expect(parseToolCall("set_mandate", { acceptSlowPace: true })).toEqual({ name: "set_mandate", input: { acceptSlowPace: true } });
+  });
+
+  it("on a mandate project set_distribution only changes the floor, and the desk's levels cannot be removed by hand", () => {
+    setMandate(ctx(), { profile: "balanced" }).needsConfirmation!.apply();
+    const refused = setDistribution(ctx(), { enabled: false, pctOfVaultPerDay: 0.4, mode: "twap" });
+    expect(refused.ok).toBe(false);
+    expect(refused.message).toMatch(/runs on a mandate/);
+    const floor = setDistribution(ctx(), { enabled: true, pctOfVaultPerDay: 0.3, mode: "strength", minPrice: 0.00011 });
+    expect(floor.needsConfirmation!.summary).toMatch(/selling floor to 0.00011/);
+    floor.needsConfirmation!.apply();
+    expect(loadProject("test").strategy.distribution.minPrice).toBe(0.00011);
+    const c = loadProject("test");
+    c.strategy.defense.levels = [{ price: 0.00017, budgetSol: 2, placedAt: 1 }];
+    saveProject(c);
+    const rm = setDefenseLevel(ctx(), { price: 0.00017, budgetSol: 0, action: "remove" });
+    expect(rm.ok).toBe(false);
+    expect(rm.message).toMatch(/the desk's/);
   });
 
   it("status shows the mandate and the horizon progress; runTool dispatches set_mandate", () => {

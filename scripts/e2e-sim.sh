@@ -13,7 +13,7 @@ cd "$ROOT"
 W=$(npm run -s wallet:new -- --label demo)
 npm run -s project:add -- --id demo --name "Demo Token" --mint 9BB6NFEcjBCtnNLFko2FqVQBq8HHM13kCyYcdQbgpump --decimals 6 \
   --wallet "$W" --mode paper --cap 1 --budget 20 --budget-day 5 --delay 24 \
-  --level 0.00019:8 --level 0.00017:8 --dist 0.6:strength --min-price 0.0001 --rebalance 0.3:0.1 --clip 0.1:0.6 >/dev/null
+  --mandate balanced --horizon-days 60 --distribute-pct 30 --min-price 0.0001 --clip 0.1:0.6 >/dev/null
 node --no-warnings apps/engine/dist/main.js >"$E2E/engine.log" 2>&1 &
 ENGINE=$!
 node --no-warnings apps/proof/dist/main.js >"$E2E/proof.log" 2>&1 &

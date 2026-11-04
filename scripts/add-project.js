@@ -95,12 +95,18 @@ if (get("mandate")) {
     console.error("--mandate must be protect, balanced or distribute");
     process.exit(1);
   }
+  const autonomy = get("autonomy", "auto");
+  if (!["auto", "ask"].includes(autonomy)) {
+    console.error("--autonomy must be auto or ask");
+    process.exit(1);
+  }
+  const alertFloor = get("alert-floor") ? Number(get("alert-floor")) : 0;
   cfg.mandate = {
     profile,
-    autonomy: get("autonomy", "auto"),
+    autonomy,
     ...(get("horizon-days") ? { horizonDays: Number(get("horizon-days")) } : {}),
     ...(get("distribute-pct") ? { distributePct: Number(get("distribute-pct")) } : {}),
-    ...(get("alert-floor") ? { alertFloor: Number(get("alert-floor")) } : {}),
+    ...(alertFloor > 0 ? { alertFloor } : {}),
     startedAt: Date.now(),
   };
   const pinned = levels.map((l) => ({ ...l, pinned: true }));
@@ -109,6 +115,9 @@ if (get("mandate")) {
   cfg.strategy.defense.levels = pinned;
   if (pinned.length > 0) cfg.strategy.defense.enabled = true;
   if (minPrice) cfg.strategy.distribution.minPrice = minPrice;
+  const ignored = ["dist", "rebalance", "strength-boost"].filter((k) => has(k));
+  if (ignored.length) console.log(`note: with --mandate the desk sets ${ignored.map((k) => "--" + k).join(", ")} itself; those flags were ignored`);
+  if (pinned.length) console.log(`note: ${pinned.length} level(s) given with --level are pinned; the desk never moves them`);
 }
 
 saveProject(cfg);
