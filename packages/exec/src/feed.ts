@@ -36,6 +36,8 @@ export class FeedError extends Error {
 export const PRICE_QUOTE_LAMPORTS = LAMPORTS_PER_SOL / 10n;
 /** Size used to estimate pool depth from price impact: 1 SOL. */
 export const IMPACT_QUOTE_LAMPORTS = LAMPORTS_PER_SOL;
+/** How long an impact-based liquidity estimate is reused before a fresh quote. */
+export const IMPACT_CACHE_MS = 60_000;
 
 /** SOL per whole token implied by a SOL -> token quote (buy side). */
 export function buyPriceFromQuote(q: JupiterQuote, decimals: number): number {
@@ -65,6 +67,8 @@ export function liquidityFromImpact(quoteSol: number, priceImpact: number): numb
 export interface Flow5m {
   buyFlow5mSol: number;
   sellFlow5mSol: number;
+  /** SOL side of the deepest SOL-quoted pair, as DexScreener reads it (a reading, unlike the impact estimate). */
+  liquiditySol?: number;
 }
 
 /**
@@ -95,11 +99,14 @@ export function flowFromDexScreener(body: unknown): Flow5m {
   // USD per SOL = priceUsd(token) / priceNative(token in SOL); requires a SOL-quoted pair.
   const quoteSymbol = asRecord(best.quoteToken)?.symbol;
   const solPerUsd = priceUsd && priceNative && priceUsd > 0 && quoteSymbol === "SOL" ? priceNative / priceUsd : undefined;
-  if (!solPerUsd || volUsd <= 0 || buys + sells === 0) return zero;
+  const quoteLiq = quoteSymbol === "SOL" ? asNumber(asRecord(best.liquidity)?.quote) : undefined;
+  const liquiditySol = quoteLiq !== undefined && quoteLiq > 0 ? quoteLiq : undefined;
+  if (!solPerUsd || volUsd <= 0 || buys + sells === 0) return liquiditySol !== undefined ? { ...zero, liquiditySol } : zero;
   const volSol = volUsd * solPerUsd;
   return {
     buyFlow5mSol: (volSol * buys) / (buys + sells),
     sellFlow5mSol: (volSol * sells) / (buys + sells),
+    ...(liquiditySol !== undefined ? { liquiditySol } : {}),
   };
 }
 
@@ -141,6 +148,7 @@ export interface JupiterFeedOptions {
 export class JupiterFeed implements PriceFeed {
   private readonly quoter: Quoter;
   private readonly dexBase: string;
+  private readonly impactCache = new Map<string, { ts: number; liquiditySol?: number }>();
   private readonly timeoutMs: number;
 
   constructor(
@@ -161,7 +169,10 @@ export class JupiterFeed implements PriceFeed {
         throw new FeedError(`rpc balances failed: ${(e as Error).message}`, true, e);
       }),
     ]);
-    return { ...priceAndLiq, ...flow, ...balances };
+    // DexScreener's pool reading wins over the impact estimate when it has one.
+    const { liquiditySol: dexLiq, ...flows } = flow;
+    const liquiditySol = dexLiq ?? priceAndLiq.liquiditySol;
+    return { ...priceAndLiq, ...flows, ...balances, ...(liquiditySol !== undefined ? { liquiditySol } : {}) };
   }
 
   private async price(cfg: ProjectConfig): Promise<{ price: number; liquiditySol?: number }> {
@@ -196,17 +207,22 @@ export class JupiterFeed implements PriceFeed {
     }
     const price = (buyPrice + sellPrice) / 2;
 
-    let liquiditySol: number | undefined;
-    try {
-      const impactQ = await this.quoter.quote({
-        inputMint: WSOL_MINT,
-        outputMint: cfg.mint,
-        amount: IMPACT_QUOTE_LAMPORTS,
-        slippageBps: 50,
-      });
-      liquiditySol = liquidityFromImpact(Number(IMPACT_QUOTE_LAMPORTS) / 1e9, impactQ.priceImpact);
-    } catch (e) {
-      logger.debug("impact quote failed, liquidity unknown", { mint: cfg.mint, err: (e as Error).message });
+    // Pool depth moves slowly: one impact quote per minute per project keeps Jupiter calls at ~2 per tick.
+    const cached = this.impactCache.get(cfg.mint);
+    let liquiditySol: number | undefined = cached && Date.now() - cached.ts < IMPACT_CACHE_MS ? cached.liquiditySol : undefined;
+    if (!cached || Date.now() - cached.ts >= IMPACT_CACHE_MS) {
+      try {
+        const impactQ = await this.quoter.quote({
+          inputMint: WSOL_MINT,
+          outputMint: cfg.mint,
+          amount: IMPACT_QUOTE_LAMPORTS,
+          slippageBps: 50,
+        });
+        liquiditySol = liquidityFromImpact(Number(IMPACT_QUOTE_LAMPORTS) / 1e9, impactQ.priceImpact);
+        this.impactCache.set(cfg.mint, { ts: Date.now(), liquiditySol });
+      } catch (e) {
+        logger.debug("impact quote failed, liquidity unknown", { mint: cfg.mint, err: (e as Error).message });
+      }
     }
     return liquiditySol === undefined ? { price } : { price, liquiditySol };
   }

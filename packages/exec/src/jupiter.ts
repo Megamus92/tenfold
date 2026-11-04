@@ -103,7 +103,9 @@ export class JupiterClient implements Quoter {
   private readonly apiKey: string | undefined;
 
   constructor(opts: { baseUrl?: string; timeoutMs?: number; apiKey?: string } = {}) {
-    this.baseUrl = (opts.baseUrl ?? process.env.TENFOLD_JUPITER_BASE_URL ?? JUPITER_API).replace(/\/+$/, "");
+    // An empty TENFOLD_JUPITER_BASE_URL (the .env template leaves it blank) means the default host.
+    const envBase = process.env.TENFOLD_JUPITER_BASE_URL?.trim();
+    this.baseUrl = (opts.baseUrl ?? (envBase ? envBase : JUPITER_API)).replace(/\/+$/, "");
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS;
     const key = opts.apiKey ?? process.env.TENFOLD_JUPITER_API_KEY;
     this.apiKey = key && key.trim() ? key.trim() : undefined;

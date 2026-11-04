@@ -13,6 +13,7 @@ import { Brain, History, systemPromptFor } from "./brain.js";
 import type { AnthropicLike, ToolRunner } from "./brain.js";
 import { ConfirmStore, confirmKeyboard, confirmText, registerConfirmHandlers } from "./confirm.js";
 import { registerMarketingHandlers } from "./marketing.js";
+import { MandateWizard } from "./wizard.js";
 
 const APOLOGY = "Something broke on my side. Nothing was changed. Try again in a moment; if it keeps happening, your Tenfold contact can see the log.";
 const UNBOUND = "This chat is not linked to a project yet. From the founder's own chat, send /start <projectId> <bindCode> (both are in your onboarding message).";
@@ -25,6 +26,7 @@ const HELP = [
   "/report   the last 24 hours",
   "/pause    stop all new orders instantly",
   "/resume   start again (asks you to confirm)",
+  "/mandate  set or change the mandate in two taps",
   "/posts    marketing drafts waiting for your approval",
   "",
   "Or just talk to me: \"protect the price for now\", \"move 20% of the vault over 30 days\", \"tell me under 0.00015\", \"what does holding 0.0002 cost?\", \"lower the cap to 0.3%\".",
@@ -88,6 +90,17 @@ export function createBot(deps: BotDeps): { bot: Bot<Context>; bindings: Binding
   const bindings = deps.bindings ?? new Bindings(safeLoadAll());
   const confirmStore = deps.confirmStore ?? new ConfirmStore();
   const history = new History();
+  const isGroupCtx = (ctx: Context): boolean => ctx.chat?.type === "group" || ctx.chat?.type === "supergroup";
+  const mayActIn = (ctx: Context): boolean => {
+    if (!isGroupCtx(ctx)) return true;
+    const chatId = chatIdOf(ctx);
+    const projectId = chatId ? bindings.projectFor(chatId) : undefined;
+    const allowed = projectId ? (safeLoad(projectId)?.telegram?.allowedUserIds ?? []) : [];
+    const userId = ctx.from ? String(ctx.from.id) : undefined;
+    return allowed.length > 0 && userId !== undefined && allowed.includes(userId);
+  };
+  const wizard = new MandateWizard({ ledger: deps.ledger, loadProject, projectFor: (chatId) => bindings.projectFor(chatId), mayAct: mayActIn });
+  wizard.register(bot);
   const brains = new Map<string, Brain>();
 
   const brainFor = (cfg: ProjectConfig): Brain => {
@@ -207,15 +220,22 @@ export function createBot(deps: BotDeps): { bot: Bot<Context>; bindings: Binding
         `Linked to ${cfg.name}${cfg.mode === "paper" ? " (paper mode: real prices, simulated fills, no real money moves)" : ""}.`,
         cfg.mandate
           ? `Mandate: ${describeMandate(cfg.mandate)}. The desk runs it on its own; you get one line per decision and a report every day. You never have to answer unless I say "Your call".`
-          : "Tell me what matters most (price, balance, or moving supply), how much of the vault over how many days, and a price under which you want to be told. I set the mandate and the desk runs it; you never have to watch it.",
+          : "Two taps and the desk runs on its own. /mandate restarts this any time.",
         "Anything you ask me to change, I confirm with a button first. Pause is instant, any time.",
         "Send /status to see where things stand, or just talk to me.",
       ].join("\n"),
     );
+    if (!cfg.mandate) await wizard.start(ctx, chatId, cfg.id);
   });
 
   bot.command("help", async (ctx) => {
     await ctx.reply(HELP);
+  });
+
+  bot.command("mandate", async (ctx) => {
+    const b = await bound(ctx);
+    if (!b) return;
+    await wizard.start(ctx, b.chatId, b.projectId);
   });
 
   bot.command("status", async (ctx) => {
@@ -243,15 +263,7 @@ export function createBot(deps: BotDeps): { bot: Bot<Context>; bindings: Binding
   });
 
   // In a group, only allowlisted users may tap Yes/No; in a private chat the bound founder is the only one there.
-  registerConfirmHandlers(bot, confirmStore, (ctx) => {
-    const isGroup = ctx.chat?.type === "group" || ctx.chat?.type === "supergroup";
-    if (!isGroup) return true;
-    const chatId = chatIdOf(ctx);
-    const projectId = chatId ? bindings.projectFor(chatId) : undefined;
-    const allowed = projectId ? (safeLoad(projectId)?.telegram?.allowedUserIds ?? []) : [];
-    const userId = ctx.from ? String(ctx.from.id) : undefined;
-    return allowed.length > 0 && userId !== undefined && allowed.includes(userId);
-  });
+  registerConfirmHandlers(bot, confirmStore, mayActIn);
 
   // Marketing: /posts lists the drafts waiting for a decision; the Approve/Reject buttons under a draft alert flip
   // the post's status in the ledger (same group allowlist rule as the Yes/No buttons).

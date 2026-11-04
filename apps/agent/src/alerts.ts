@@ -227,7 +227,14 @@ export function formatEvent(ev: EngineEvent, cfg: ProjectConfig, ledger: LedgerR
       const why = s(d, "why") ?? "";
       const options = Array.isArray(d["options"]) ? (d["options"] as unknown[]).filter((o): o is string => typeof o === "string") : [];
       const topic = s(d, "topic");
-      const head = topic === "liquidity_pull" ? "I need you on this one." : topic === "budget_top_up" ? "Your call:" : topic === "target_reached" ? "Done:" : "Heads up:";
+      const head =
+        topic === "liquidity_pull"
+          ? "I need you on this one."
+          : topic === "budget_top_up" || topic === "no_sol" || topic === "unfunded"
+            ? "Your call:"
+            : topic === "target_reached"
+              ? "Done:"
+              : "Heads up:";
       return `${head} ${why}${options.length ? ` Options: ${options.join(" / ")}.` : ""}`;
     }
     case "weekly_report": {

@@ -58,7 +58,16 @@ export interface DeskDecision {
   why: string;
 }
 
-export type EscalationTopic = "budget_top_up" | "horizon_unreachable" | "liquidity_pull" | "insider_sell" | "under_alert_floor" | "target_reached" | "trend_down";
+export type EscalationTopic =
+  | "budget_top_up"
+  | "horizon_unreachable"
+  | "liquidity_pull"
+  | "insider_sell"
+  | "under_alert_floor"
+  | "target_reached"
+  | "trend_down"
+  | "unfunded" // the project wallet holds neither tokens nor SOL: nothing can start
+  | "no_sol"; // tokens are there but no SOL: distribution can run, defense cannot
 
 export interface DeskEscalation {
   topic: EscalationTopic;
@@ -177,6 +186,18 @@ export function decide(input: DeskInput): DeskOutput {
     out.decisions.push({ change: { kind: "mandate_started", startTokens: out.mandate.startTokens }, why: "First look at a funded vault: the horizon is measured from here." });
   }
 
+  // ---- 0. funding: an empty wallet has nothing to decide about; say so once a day and stop here ----
+  const vaultSolNow = Math.max(0, lamportsToSol(snapshot.vaultLamports - FEE_RESERVE_LAMPORTS));
+  if (snapshot.vaultTokens === 0n && vaultSolNow < MIN_LEVEL_BUDGET_SOL) {
+    out.escalations.push({
+      topic: "unfunded",
+      why: `The project wallet ${cfg.walletPubkey} holds no tokens and no SOL yet. Send the tokens to distribute and the SOL to defend with, and the desk starts within a minute.`,
+      options: ["fund the wallet", "stay in paper mode for now"],
+      throttleMs: DAY,
+    });
+    return out;
+  }
+
   // ---- A. liquidity pull: stop everything, ask the founder ----
   const before = hourAgo(lastHour.length ? lastHour : history, now);
   if (!cfg.paused && snapshot.liquiditySol !== undefined && before?.liquiditySol !== undefined && before.liquiditySol > 0) {
@@ -269,17 +290,27 @@ export function decide(input: DeskInput): DeskOutput {
         throttleMs: DAY,
       });
     } else if (budgetable < MIN_LEVEL_BUDGET_SOL) {
+      const noSol = vaultSol < MIN_LEVEL_BUDGET_SOL && lifeLeft >= MIN_LEVEL_BUDGET_SOL;
       if (managedKept > 0 || changedLevels) {
-        for (const l of keep.filter((x) => !x.pinned)) out.decisions.push({ change: { kind: "remove_level", price: l.price, cause: "no_budget" }, why: "Defense budget is used up; no level can be funded." });
+        for (const l of keep.filter((x) => !x.pinned)) out.decisions.push({ change: { kind: "remove_level", price: l.price, cause: "no_budget" }, why: noSol ? "No SOL left in the project wallet; no level can be funded." : "Defense budget is used up; no level can be funded." });
         for (let i = keep.length - 1; i >= 0; i--) if (!keep[i]!.pinned) keep.splice(i, 1);
         changedLevels = true;
       }
-      out.escalations.push({
-        topic: "budget_top_up",
-        why: `The defense budget is used up (${fmtSol(lifeLeft)} SOL left of ${fmtSol(cfg.rules.defenseBudgetSol)}, ${fmtSol(vaultSol)} SOL in the wallet). Levels are resting; distribution continues.`,
-        options: ["top up the defense budget", "send more SOL to the project wallet", "leave the defense resting"],
-        throttleMs: DAY,
-      });
+      if (noSol) {
+        out.escalations.push({
+          topic: "no_sol",
+          why: `The project wallet holds ${fmtSol(vaultSol)} SOL: the defense has nothing to buy with (${fmtSol(lifeLeft)} SOL of budget is unused). Distribution continues; send SOL to ${cfg.walletPubkey} to defend.`,
+          options: ["send SOL to the project wallet", "run without defense"],
+          throttleMs: DAY,
+        });
+      } else {
+        out.escalations.push({
+          topic: "budget_top_up",
+          why: `The defense budget is used up (${fmtSol(lifeLeft)} SOL left of ${fmtSol(cfg.rules.defenseBudgetSol)}, ${fmtSol(vaultSol)} SOL in the wallet). Levels are resting; distribution continues.`,
+          options: ["top up the defense budget", "send more SOL to the project wallet", "leave the defense resting"],
+          throttleMs: DAY,
+        });
+      }
     } else if (managedKept < p.levels && cooldownOk && dayLeft >= MIN_LEVEL_BUDGET_SOL) {
       let pool = budgetable;
       for (let k = managedKept; k < p.levels; k++) {

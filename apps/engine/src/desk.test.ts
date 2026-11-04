@@ -129,6 +129,22 @@ describe("desk manager: decide", () => {
     expect(placed.change.price).toBeCloseTo(0.0002 * (1 - 2 * PROFILES.balanced.levelDistancePct / 100), 10);
   });
 
+  it("an empty wallet gets one 'fund it' escalation and nothing else", () => {
+    const out = decide(input({ snapshot: snap({ vaultTokens: 0n, vaultLamports: 0n }) }));
+    expect(out.decisions).toEqual([]);
+    expect(out.escalations.map((e) => e.topic)).toEqual(["unfunded"]);
+    expect(out.escalations[0]!.why).toContain(WALLET);
+  });
+
+  it("tokens without SOL: distribution runs, defense asks for SOL instead of claiming the budget is spent", () => {
+    const c = cfg();
+    c.mandate!.startTokens = "1";
+    const out = decide(input({ cfg: c, snapshot: snap({ vaultLamports: 0n }) }));
+    expect(out.escalations.map((e) => e.topic)).toContain("no_sol");
+    expect(out.escalations.map((e) => e.topic)).not.toContain("budget_top_up");
+    expect(out.strategy.distribution.enabled).toBe(true);
+  });
+
   it("rests the defense and escalates once the budget is used up", () => {
     const c = cfg();
     c.strategy.defense.levels = [{ price: 0.00019, budgetSol: 5 }];

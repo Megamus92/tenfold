@@ -51,6 +51,14 @@ describe("JupiterClient access", () => {
     expect(init.headers).toEqual({});
   });
 
+  it("an empty TENFOLD_JUPITER_BASE_URL means the default host", async () => {
+    process.env.TENFOLD_JUPITER_BASE_URL = "";
+    const spy = fetchSpy();
+    await new JupiterClient().quote({ inputMint: quoteBody.inputMint, outputMint: quoteBody.outputMint, amount: 1n, slippageBps: 50 });
+    const [url] = spy.mock.calls[0] as unknown as [string];
+    expect(url.startsWith(`${JUPITER_API}/swap/v1/quote?`)).toBe(true);
+  });
+
   it("an explicit apiKey beats the environment", async () => {
     process.env.TENFOLD_JUPITER_API_KEY = "env-key";
     const spy = fetchSpy();
