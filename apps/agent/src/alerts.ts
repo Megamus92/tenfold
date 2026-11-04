@@ -4,7 +4,7 @@
  */
 import { baseToTokens, defenseCostPerHourSol, lamportsToSol, logger } from "@tenfold/core";
 import type { EngineEvent, Ledger, ProjectConfig } from "@tenfold/core";
-import { formatDailyReport } from "./actions.js";
+import { formatDailyReport, reportExtrasFrom } from "./actions.js";
 import { fmtHours, fmtPct, fmtPrice, fmtSol, fmtTokens } from "./format.js";
 
 export const POLL_INTERVAL_MS = 5_000;
@@ -143,7 +143,7 @@ export function formatEvent(ev: EngineEvent, cfg: ProjectConfig, ledger: LedgerR
     case "resumed":
       return "Resumed. Defense, distribution and rebalancing are live again.";
     case "daily_report":
-      return formatDailyReport(ledger.dailyReport(cfg.id, ev.ts), cfg);
+      return formatDailyReport(ledger.dailyReport(cfg.id, ev.ts), cfg, reportExtrasFrom(d));
     case "badge_changed": {
       const from = s(d, "from");
       const to = s(d, "to");
@@ -240,7 +240,7 @@ export function formatEvent(ev: EngineEvent, cfg: ProjectConfig, ledger: LedgerR
     case "weekly_report": {
       const r = ledger.dailyReport(cfg.id, ev.ts); // shape only; the real numbers come in the event data
       const week = { ...r, ...weekFromEvent(d, r) };
-      return formatDailyReport(week, cfg).replace(/^.*?: 24h report/, `${cfg.name}: 7-day report`);
+      return formatDailyReport(week, cfg, reportExtrasFrom(d)).replace(/^.*?: 24h report/, `${cfg.name}: 7-day report`);
     }
     case "order_proposed":
     case "config_changed":

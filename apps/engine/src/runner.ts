@@ -13,6 +13,7 @@ import {
   lamportsToSol,
   loadProject,
   logger,
+  mandateTargets,
   saveProject,
   solToLamports,
   tokensToBase,
@@ -540,12 +541,34 @@ export class ProjectRunner {
     if (this.lastDailyReportDay === day) return;
     this.lastDailyReportDay = day;
     const report = this.ledger.dailyReport(this.cfg.id, now);
-    this.emit("daily_report", now, { ...report });
+    this.emit("daily_report", now, { ...report, ...this.reportExtras(now, DAY) });
     if (d.getDay() === WEEKLY_REPORT_DOW && this.lastWeeklyReportDay !== day) {
       this.lastWeeklyReportDay = day;
       const week = this.ledger.periodReport(this.cfg.id, now - 7 * DAY, now);
-      this.emit("weekly_report", now, { ...week, mandate: this.cfg.mandate });
+      this.emit("weekly_report", now, { ...week, ...this.reportExtras(now, 7 * DAY) });
     }
+  }
+
+  /** What the desk did over the window and where the horizon stands, for the founder's report. */
+  private reportExtras(now: number, windowMs: number): { desk: Record<string, number>; horizon?: { donePct: number; elapsedPct: number; distributePct: number; horizonDays: number } } {
+    const desk: Record<string, number> = {};
+    for (const ev of this.ledger.listEvents(this.cfg.id, { types: ["desk_decision"], since: now - windowMs, limit: 5000 })) {
+      const kind = typeof ev.data.kind === "string" ? ev.data.kind : "other";
+      if (kind === "mandate_started") continue;
+      desk[kind] = (desk[kind] ?? 0) + 1;
+    }
+    const m = this.cfg.mandate;
+    if (!m || !m.startTokens) return { desk };
+    const { horizonDays, distributePct } = mandateTargets(m);
+    const start = BigInt(m.startTokens);
+    const target = (start * BigInt(Math.round(distributePct * 100))) / 10_000n;
+    const distributed = this.ledger
+      .listFills(this.cfg.id, { since: m.startedAt, limit: 100_000 })
+      .filter((f) => f.side === "sell" && f.reason === "DIST")
+      .reduce((a, f) => a + f.inAmount, 0n);
+    const donePct = target > 0n ? Math.min(100, (Number(distributed) / Number(target)) * 100) : 0;
+    const elapsedPct = Math.min(100, Math.max(0, ((now - m.startedAt) / (horizonDays * DAY)) * 100));
+    return { desk, horizon: { donePct, elapsedPct, distributePct, horizonDays } };
   }
 
   // ---------- desk manager ----------

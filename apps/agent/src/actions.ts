@@ -325,7 +325,23 @@ export function costToHold(ctx: ActionContext, price: number): ActionResult {
 }
 
 /** The last 24h as a short table-like text. */
-export function formatDailyReport(r: DailyReport, cfg: ProjectConfig): string {
+export interface ReportExtras {
+  /** Desk decisions over the window, by kind. */
+  desk?: Record<string, number>;
+  horizon?: { donePct: number; elapsedPct: number; distributePct: number; horizonDays: number };
+}
+
+const DESK_KIND_LABELS: Record<string, string> = {
+  place_level: "levels placed",
+  move_level: "levels trailed up",
+  remove_level: "levels removed",
+  set_pace: "pace changes",
+  set_boost: "boost set",
+  distribution_done: "target reached",
+  pause: "paused",
+};
+
+export function formatDailyReport(r: DailyReport, cfg: ProjectConfig, extras: ReportExtras = {}): string {
   const d = cfg.decimals;
   const sold = baseToTokens(r.soldTokens, d);
   const bought = baseToTokens(r.boughtTokens, d);
@@ -342,7 +358,38 @@ export function formatDailyReport(r: DailyReport, cfg: ProjectConfig): string {
   if (r.vaultTokens !== undefined && r.vaultLamports !== undefined) {
     lines.push(`Vault: ${fmtTokens(baseToTokens(r.vaultTokens, d))} tokens + ${fmtSol(lamportsToSol(r.vaultLamports))} SOL`);
   }
+  if (extras.horizon) {
+    const h = extras.horizon;
+    lines.push(`Horizon: ${fmtPct(h.donePct)} of the ${h.distributePct}% target distributed at ${fmtPct(h.elapsedPct)} of the ${h.horizonDays} days`);
+  }
+  if (extras.desk) {
+    const parts = Object.entries(extras.desk)
+      .filter(([, n]) => n > 0)
+      .map(([k, n]) => `${n} ${DESK_KIND_LABELS[k] ?? k.replace(/_/g, " ")}`);
+    lines.push(parts.length ? `Desk: ${parts.join(", ")}` : "Desk: no changes needed");
+  }
   return lines.join("\n");
+}
+
+/** Pull the report extras out of a daily/weekly event's data (numbers only; nothing else is trusted). */
+export function reportExtrasFrom(data: Record<string, unknown>): ReportExtras {
+  const out: ReportExtras = {};
+  const desk = data["desk"];
+  if (desk && typeof desk === "object") {
+    out.desk = {};
+    for (const [k, v] of Object.entries(desk as Record<string, unknown>)) if (typeof v === "number" && Number.isFinite(v)) out.desk[k] = v;
+  }
+  const h = data["horizon"];
+  if (h && typeof h === "object") {
+    const o = h as Record<string, unknown>;
+    const n = (k: string): number | undefined => (typeof o[k] === "number" && Number.isFinite(o[k]) ? (o[k] as number) : undefined);
+    const donePct = n("donePct");
+    const elapsedPct = n("elapsedPct");
+    const distributePct = n("distributePct");
+    const horizonDays = n("horizonDays");
+    if (donePct !== undefined && elapsedPct !== undefined && distributePct !== undefined && horizonDays !== undefined) out.horizon = { donePct, elapsedPct, distributePct, horizonDays };
+  }
+  return out;
 }
 
 export function dailyReport(ctx: ActionContext): ActionResult {

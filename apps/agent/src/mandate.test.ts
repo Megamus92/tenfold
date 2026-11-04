@@ -105,6 +105,19 @@ describe("desk alerts", () => {
     expect(liq).toBe("I need you on this one. Liquidity gone.");
   });
 
+  it("adds the desk's activity and the horizon to a daily report when the event carries them", () => {
+    const now = Date.now();
+    const text = formatEvent(
+      { type: "daily_report", projectId: "test", ts: now, data: { desk: { place_level: 2, remove_level: 1, set_pace: 3 }, horizon: { donePct: 38.2, elapsedPct: 36.7, distributePct: 50, horizonDays: 30 } } },
+      fx.cfg,
+      fx.ledger,
+    );
+    expect(text).toMatch(/Horizon: 38.2% of the 50% target distributed at 36.7% of the 30 days/);
+    expect(text).toMatch(/Desk: 2 levels placed, 1 levels removed, 3 pace changes/);
+    const quiet = formatEvent({ type: "daily_report", projectId: "test", ts: now, data: { desk: {} } }, fx.cfg, fx.ledger);
+    expect(quiet).toMatch(/Desk: no changes needed/);
+  });
+
   it("formats the weekly report from the event's own numbers", () => {
     const now = Date.now();
     const text = formatEvent(
