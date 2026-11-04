@@ -337,6 +337,21 @@ describe("REB inventory rebalance", () => {
     expect(proposeRebalance(baseInput({ cfg: { ...buyCfg, mandate: { ...mandate, alertFloor: 0.0003 } } }))[0]?.side).toBe("buy");
   });
 
+  it("under a mandate it never sells back what the defense just bought, and never sells cap dust", () => {
+    const mandate = { profile: "balanced" as const, autonomy: "auto" as const, startedAt: 0 };
+    const base = testConfig({ rules: { dailySellCapPct: 20 }, strategy: { distribution: { enabled: true, pctOfVaultPerDay: 0.5, mode: "strength" }, rebalance: { enabled: true, targetSolShare: 0.5, band: 0.1 }, clip: { maxSol: 50 } } });
+    const cfg = { ...base, mandate };
+    const now = 1_000_000_000_000;
+    const defBuy: Order = { id: "d1", projectId: "test", side: "buy", reason: "DEF", inputMint: "So11111111111111111111111111111111111111112", outputMint: cfg.mint, amountIn: solToLamports(0.5), maxSlippageBps: 100, refPrice: 0.0002, note: "level:0.00019 under", status: "filled", createdAt: now - 10 * 60_000, updatedAt: now - 10 * 60_000 };
+    expect(proposeRebalance(baseInput({ cfg, now, lastOrders: [defBuy] }))).toEqual([]); // 10 minutes after a defense buy
+    const older = { ...defBuy, createdAt: now - 16 * 60_000, updatedAt: now - 16 * 60_000 };
+    expect(proposeRebalance(baseInput({ cfg, now, lastOrders: [older] }))).toHaveLength(1);
+    // cap dust: 0.1 SOL of cap left under a 0.25 SOL minimum clip -> wait for the window
+    const dust = { ...cfg, rules: { ...cfg.rules, dailySellCapPct: 0.01 }, strategy: { ...cfg.strategy, clip: { ...cfg.strategy.clip, minSol: 0.25 } } };
+    expect(proposeRebalance(baseInput({ cfg: dust, now }))).toEqual([]);
+    expect(proposeRebalance(baseInput({ cfg: { ...dust, mandate: undefined }, now })).length).toBe(1); // without a mandate the founder's setting stands
+  });
+
   it("waits ten minutes between orders", () => {
     const cfg = testConfig({ strategy: { rebalance: { enabled: true, targetSolShare: 0.1, band: 0.05 } } });
     const now = 1_000_000_000_000;

@@ -217,6 +217,9 @@ export class Ledger {
         PRIMARY KEY (project_id, day)
       );
     `);
+    // Additive columns on existing databases (CREATE TABLE IF NOT EXISTS leaves an old table as it was).
+    const snapshotCols = (this.db.prepare(`PRAGMA table_info(snapshots)`).all() as { name: string }[]).map((c) => c.name);
+    if (!snapshotCols.includes("liquidity_source")) this.db.exec(`ALTER TABLE snapshots ADD COLUMN liquidity_source TEXT`);
   }
 
   // ---------- projects ----------
@@ -249,14 +252,15 @@ export class Ledger {
   insertSnapshot(s: Snapshot): void {
     this.db
       .prepare(
-        `INSERT INTO snapshots (project_id, ts, price, liquidity_sol, buy_flow_5m_sol, sell_flow_5m_sol, vault_tokens, vault_lamports)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO snapshots (project_id, ts, price, liquidity_sol, liquidity_source, buy_flow_5m_sol, sell_flow_5m_sol, vault_tokens, vault_lamports)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         s.projectId,
         s.ts,
         s.price,
         s.liquiditySol ?? null,
+        s.liquiditySource ?? null,
         s.buyFlow5mSol,
         s.sellFlow5mSol,
         s.vaultTokens.toString(),
@@ -858,6 +862,7 @@ interface SnapshotRow {
   ts: number;
   price: number;
   liquidity_sol: number | null;
+  liquidity_source: string | null;
   buy_flow_5m_sol: number;
   sell_flow_5m_sol: number;
   vault_tokens: string;
@@ -869,6 +874,7 @@ function rowToSnapshot(r: SnapshotRow): Snapshot {
     ts: r.ts,
     price: r.price,
     liquiditySol: r.liquidity_sol ?? undefined,
+    ...(r.liquidity_source === "dex" || r.liquidity_source === "impact" ? { liquiditySource: r.liquidity_source } : {}),
     buyFlow5mSol: r.buy_flow_5m_sol,
     sellFlow5mSol: r.sell_flow_5m_sol,
     vaultTokens: BigInt(r.vault_tokens),

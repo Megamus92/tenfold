@@ -26,6 +26,8 @@ export const REB_MIN_GAP_MS = 10 * 60_000;
 export const REB_GAP_FRACTION = 0.25;
 /** REB never trades opposite to an own order younger than this, so it never completes a round trip. */
 export const REB_OPPOSITE_SIDE_COOLDOWN_MS = 5 * 60_000;
+/** Under a mandate, no rebalance sell within this long of a defense buy. */
+export const REB_AFTER_DEFENSE_MS = 15 * 60_000;
 
 const COMMITTED = new Set<Order["status"]>(["filled", "approved", "sent"]);
 
@@ -64,6 +66,9 @@ export function proposeRebalance(input: StrategyInput): Proposal[] {
     if (cfg.mandate) {
       if (!cfg.strategy.distribution.enabled) return [];
       if (cfg.mandate.alertFloor !== undefined && snapshot.price < cfg.mandate.alertFloor) return [];
+      // No selling back what the defense just bought: a price wobbling around a level must not turn DEF and REB
+      // into a round trip inside the cap.
+      if (msSinceLast(lastOrders, now, (o) => o.side === "buy" && o.reason === "DEF" && COMMITTED.has(o.status)) < REB_AFTER_DEFENSE_MS) return [];
     }
     if (msSinceLast(lastOrders, now, (o) => o.side === "buy" && COMMITTED.has(o.status)) < REB_OPPOSITE_SIDE_COOLDOWN_MS) return [];
     if (inNoSellZone(snapshot.price, activeLevels(cfg, rolling, snapshot, lastOrders))) return [];
@@ -72,6 +77,8 @@ export function proposeRebalance(input: StrategyInput): Proposal[] {
     const capRemaining = dailyCapRemaining(cfg, snapshot, rolling);
     const tokens = minBig(tokensForSol(stepSol, snapshot.price, cfg.decimals), capRemaining, snapshot.vaultTokens);
     if (tokens <= 0n || lamportsForTokens(tokens, snapshot.price, cfg.decimals) < MIN_ORDER_LAMPORTS) return [];
+    // Cap dust is not a rebalance: under a mandate a sell smaller than the smallest clip waits for the cap to roll over.
+    if (cfg.mandate && lamportsForTokens(tokens, snapshot.price, cfg.decimals) < solToLamports(cfg.strategy.clip.minSol)) return [];
     return [sellProposal(cfg, snapshot, "REB", tokens, `solShare=${(share * 100).toFixed(1)}% target=${(reb.targetSolShare * 100).toFixed(0)}% sell`)];
   }
 

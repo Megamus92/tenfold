@@ -46,7 +46,7 @@ function started(m: Mandate | null = mandate(), over: Parameters<typeof cfg>[1] 
 }
 
 function snap(over: Partial<Snapshot> = {}): Snapshot {
-  return { projectId: "d1", ts: T0, price: P, buyFlow5mSol: 1, sellFlow5mSol: 1, vaultTokens: tokensToBase(1_000_000, DEC), vaultLamports: solToLamports(40), liquiditySol: 200, ...over };
+  return { projectId: "d1", ts: T0, price: P, buyFlow5mSol: 1, sellFlow5mSol: 1, vaultTokens: tokensToBase(1_000_000, DEC), vaultLamports: solToLamports(40), liquiditySol: 200, liquiditySource: "dex", ...over };
 }
 
 function rolling(over: Partial<RollingState> = {}): RollingState {
@@ -127,8 +127,9 @@ describe("desk manager: decide", () => {
     expect(prices[0]).toBeCloseTo(P * (1 - d1 * bal.ladder[0]!), 9);
     expect(prices[1]).toBeCloseTo(P * (1 - d1 * bal.ladder[1]!), 9);
     expect(prices[2]).toBeCloseTo(P * (1 - d1 * bal.ladder[2]!), 9);
-    // the day's 5 SOL split 25/35/40 across the ladder
-    expect(out.strategy.defense.levels.map((l) => l.budgetSol)).toEqual([1.25, 1.75, 2]);
+    // 60% of the day's 5 SOL (the rest is kept for re-placements) split 25/35/40 across the ladder, ranks carried
+    expect(out.strategy.defense.levels.map((l) => l.budgetSol)).toEqual([0.75, 1.05, 1.2]);
+    expect(out.strategy.defense.levels.map((l) => l.rank)).toEqual([0, 1, 2]);
     expect(out.strategy.defense.levels.every((l) => l.placedAt === T0)).toBe(true);
     expect(out.strategy.distribution.enabled).toBe(true);
     expect(out.strategy.distribution.pctOfVaultPerDay).toBeGreaterThan(0);
@@ -194,21 +195,29 @@ describe("desk manager: decide", () => {
     expect(re!.placedAt!).toBeGreaterThan(spent.createdAt);
   });
 
-  it("lets a level breathe on sustained one-sided selling, stepping the ladder down", () => {
+  it("lets a level breathe on one-sided selling of size or on its own burn, the top rung stepping aside for a while", () => {
     const c = started();
-    c.strategy.defense.levels = [level(P, 2, { placedAt: T0 - HOUR })];
+    c.strategy.defense.levels = [level(P, 2, { placedAt: T0 - HOUR, rank: 0 }), level(P * 0.9, 2, { placedAt: T0 - HOUR, rank: 1 })];
     const s = snap({ price: P, sellFlow5mSol: 1, buyFlow5mSol: 0.1 });
     const out = decide(input({ cfg: c, snapshot: s, history: history(P, { sell: 1, buy: 0.1 }) }));
     const removed = out.decisions.find((d) => d.change.kind === "remove_level");
-    expect(removed?.change).toMatchObject({ cause: "breathe" });
-    expect(removed?.why).toMatch(/breathe/);
-    expect(out.strategy.defense.levels).toEqual([]);
-    const later = decide(fresh({ cfg: { ...c, strategy: out.strategy }, snapshot: snap(), history: history(P), lastLevelRemovedAt: T0 - HOUR }));
+    expect(removed?.change).toMatchObject({ cause: "breathe", price: P });
+    expect(removed?.why).toMatch(/steps aside for 3 h.*The ladder's next level at 0\.0001800 holds/);
+    expect(out.strategy.defense.levels.map((l) => l.price)).toEqual([P * 0.9]);
+    // the desk's own burn on a level (not the pool's flow) is the other trigger: 1 SOL absorbed in 15 min, day budget 5 -> 1.25 h
+    const burn: Order = { id: "b1", projectId: "d1", side: "buy", reason: "DEF", inputMint: "x", outputMint: "y", amountIn: solToLamports(1), maxSlippageBps: 100, refPrice: P, status: "filled", createdAt: T0 - 5 * MINUTE, updatedAt: T0 - 5 * MINUTE, note: `level:${P} under` };
+    const own = decide(input({ cfg: c, snapshot: snap({ price: P }), history: history(P), recentOrders: [burn] }));
+    expect(own.decisions.find((d) => d.change.kind === "remove_level")?.why).toMatch(/absorbed 1\.00 SOL in the last 15 minutes; at that rate today's budget lasts 1\.3 h/);
+    // the pool's net selling alone (3 SOL/h against the market, nothing absorbed by the desk) is not a reason
+    const pool = decide(input({ cfg: c, snapshot: snap({ price: P, sellFlow5mSol: 0.4, buyFlow5mSol: 0.15 }), history: history(P, { sell: 0.4, buy: 0.15 }) }));
+    expect(kinds(pool)).not.toContain("remove_level");
+    // while the breathe is recent the top rung stays out; after it expires it is back at the top
+    const resting = decide(fresh({ cfg: { ...c, strategy: out.strategy }, snapshot: snap(), history: history(P), lastLevelRemovedAt: T0 - HOUR, lastBreatheAt: T0 - HOUR }));
+    expect(resting.strategy.defense.levels.map((l) => l.rank)).toEqual([1, 2]);
+    expect(resting.decisions.find((d) => d.change.kind === "place_level")?.why).toMatch(/top rung resting after the breathe/);
+    const later = decide(fresh({ cfg: { ...c, strategy: resting.strategy }, snapshot: snap(), history: history(P), lastLevelRemovedAt: T0 - 4 * HOUR, lastBreatheAt: T0 - 4 * HOUR }));
+    expect(later.strategy.defense.levels.map((l) => l.rank)).toEqual([0, 1, 2]);
     expect(later.strategy.defense.levels[0]!.price).toBeCloseTo(P * (1 - d1 * bal.ladder[0]!), 9);
-    // while the breathe is recent the whole ladder sits one notch lower
-    const lower = decide(fresh({ cfg: { ...c, strategy: out.strategy }, snapshot: snap(), history: history(P), lastLevelRemovedAt: T0 - HOUR, lastBreatheAt: T0 - HOUR }));
-    expect(lower.strategy.defense.levels[0]!.price).toBeCloseTo(P * (1 - d1 * (bal.ladder[0]! + 1)), 9);
-    expect(lower.decisions.find((d) => d.change.kind === "place_level")?.why).toMatch(/one notch lower/);
   });
 
   it("re-places a consumed TOP rung at the top, not at the bottom: rungs are positions, not a count", () => {
@@ -229,12 +238,23 @@ describe("desk manager: decide", () => {
     expect(Math.min(...prices)).toBeGreaterThanOrEqual(P * (1 - d1 * bal.ladder[2]! * 1.001));
     const placed = later.decisions.find((d) => d.change.kind === "place_level");
     expect(placed?.why).toMatch(/^Placed a defense level at .* 5% under/);
-    // a breathed top rung comes back one notch under where it was, not at the deepest rung
+    // a breathed top rung stays out while the breathe is recent: nothing is placed at the bottom instead
     const breathed = decide(fresh({ cfg: { ...c, strategy: out.strategy }, recentOrders: [spent], lastLevelRemovedAt: T0 - HOUR, lastBreatheAt: T0 - 10 * MINUTE }));
-    const bp = breathed.strategy.defense.levels.map((l) => l.price);
-    expect(bp).toHaveLength(3);
-    expect(bp[0]).toBe(ladder[1]); // the survivors claim the two upper rungs of the lowered ladder
-    expect(bp[2]).toBeCloseTo(P * (1 - d1 * (bal.ladder[2]! + 1)), 12);
+    expect(breathed.strategy.defense.levels.map((l) => l.price)).toEqual([ladder[1], ladder[2]]);
+    expect(kinds(breathed)).not.toContain("place_level");
+    // the anchor fell by one base distance and the volatility doubled between the removal and the replacement:
+    // the rank, not proximity, decides where the fresh budget goes
+    const fell = P * (1 - d1);
+    const ranked = { ...c, strategy: { ...out.strategy, defense: { ...out.strategy.defense, levels: out.strategy.defense.levels.map((l, i) => ({ ...l, rank: i + 1 })) } } };
+    const wild = history(fell).map((s, i) => ({ ...s, price: fell * (1 + (i % 2 ? 0.02 : -0.02)) }));
+    const moved = decide(fresh({ cfg: ranked, snapshot: snap({ price: fell }), rolling: rolling({ price5mAgo: fell }), history: wild, recentOrders: [spent], lastLevelRemovedAt: T0 - HOUR }));
+    const ml = moved.strategy.defense.levels;
+    expect(ml).toHaveLength(3);
+    expect(ml.map((l) => l.rank).sort()).toEqual([0, 1, 2]);
+    const top = ml.find((l) => l.rank === 0)!;
+    expect(top.price).toBeGreaterThan(ml.find((l) => l.rank === 2)!.price); // never the deepest rung
+    expect(1 - top.price / fell).toBeLessThan(0.13); // within one (widened) base distance of the new anchor
+    expect(moved.decisions.find((d) => d.change.kind === "place_level")?.why).toMatch(/^Placed a defense level at/);
   });
 
   it("caps the deepest rung at the ladder depth and still places three rungs in a wild market", () => {
@@ -459,9 +479,15 @@ describe("desk manager: decide", () => {
     expect(kinds(confirmed)).toContain("pause");
     expect(confirmed.escalations.map((e) => e.topic)).toContain("liquidity_pull");
     // the quote-impact estimate flips with routing: it never hard-stops, it only pauses distribution
-    const estimate = decide(input({ snapshot: snap({ liquiditySol: 60, liquiditySource: "impact" }), history: recentLow }));
+    const estimates = recentLow.map((s) => ({ ...s, liquiditySource: "impact" as const }));
+    const estimate = decide(input({ snapshot: snap({ liquiditySol: 60, liquiditySource: "impact" }), history: estimates }));
     expect(estimate.pause).toBeUndefined();
     expect(estimate.strategy.distribution.enabled).toBe(false);
+    // a source flip (pool readings for an hour, then the estimate) is not a liquidity change: nothing happens
+    const flip = decide(input({ snapshot: snap({ liquiditySol: 60, liquiditySource: "impact" }), history: history(P, { liquiditySol: 200, stepMin: 1 }) }));
+    expect(flip.pause).toBeUndefined();
+    expect(flip.strategy.distribution.enabled).toBe(true);
+    expect(kinds(flip)).not.toContain("set_clip");
     const softer = history(P, { liquiditySol: 200, stepMin: 1 }).map((s) => (s.ts >= T0 - 15 * MINUTE ? { ...s, liquiditySol: 130 } : s));
     const soft = decide(input({ snapshot: snap({ liquiditySol: 130 }), history: softer }));
     expect(soft.pause).toBeUndefined();
@@ -669,6 +695,72 @@ describe("desk manager in the runner", () => {
     h.advance(DESK_INTERVAL_MS);
     await h.runner.tick();
     expect(h.ledger.listEvents("d1", { types: ["desk_decision"], limit: 100 }).length).toBe(before);
+  });
+
+  it("at ten-second ticks the first ladder waits for ten minutes of prices, not twelve rows", async () => {
+    const h = harness(cfg());
+    for (let i = 0; i < 30; i++) {
+      await h.runner.tick();
+      h.advance(10_000); // 5 minutes: 30 rows, three minute-points
+    }
+    expect(h.ledger.listEvents("d1", { types: ["desk_decision"], limit: 50 }).map((e) => e.data.kind)).not.toContain("place_level");
+    for (let i = 0; i < 60; i++) {
+      await h.runner.tick();
+      h.advance(10_000); // ten more minutes
+    }
+    await h.runner.tick();
+    expect(h.ledger.listEvents("d1", { types: ["desk_decision"], limit: 50 }).map((e) => e.data.kind)).toContain("place_level");
+  });
+
+  it("ask: a safety zero the desk set is lifted by the desk when the cause clears, back to the agreed pace only", async () => {
+    const h = harness(cfg(mandate({ autonomy: "ask" })));
+    await warm(h);
+    expect(h.runner.cfg.strategy.distribution.enabled).toBe(true);
+    const agreed = h.runner.cfg.strategy.distribution.pctOfVaultPerDay;
+    h.ledger.recordInsiderSell({ projectId: "d1", wallet: "TeamWallet111111111111111111111111111111111", ts: h.now(), txSig: "sig1", amount: 1000n });
+    h.advance(DESK_INTERVAL_MS);
+    await h.runner.tick();
+    expect(h.runner.cfg.strategy.distribution.enabled).toBe(false);
+    // 25 hours later the sell is out of the window: distribution is back on by itself, at the agreed pace
+    h.advance(25 * HOUR);
+    await h.runner.tick();
+    expect(h.runner.cfg.strategy.distribution.enabled).toBe(true);
+    expect(h.runner.cfg.strategy.distribution.pctOfVaultPerDay).toBeLessThanOrEqual(agreed + 1e-9);
+    expect(h.ledger.listEvents("d1", { types: ["desk_decision"], limit: 100 }).filter((e) => e.data.kind === "set_pace").length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("a tier-1 drop reaches the desk at once and holds the defense for an hour; a breached loss limit with no live level still rests the defense", async () => {
+    const h = harness(cfg());
+    await warm(h);
+    h.advance(DESK_INTERVAL_MS);
+    await h.runner.tick(); // a desk run just happened; the next natural one is 15 minutes away
+    expect(h.runner.cfg.strategy.defense.levels.length).toBe(3);
+    h.advance(2 * MINUTE);
+    h.feed.price = P * 0.88; // -12% in one tick
+    await h.runner.tick();
+    expect(h.runner.cfg.strategy.defense.levels).toEqual([]);
+    expect(h.runner.cfg.strategy.distribution.enabled).toBe(false);
+    // the hold outlasts the five-minute window: no ladder after the cooldown either
+    h.feed.price = P * 0.88;
+    for (let i = 0; i < 30; i++) {
+      h.advance(MINUTE);
+      await h.runner.tick();
+    }
+    expect(h.runner.cfg.strategy.defense.levels).toEqual([]);
+    for (let i = 0; i < 60; i++) {
+      h.advance(MINUTE);
+      await h.runner.tick();
+    }
+    expect(h.runner.cfg.strategy.defense.levels.length).toBe(3);
+    // the loss limit with no live level: the rest is recorded from the escalation, not from a removal
+    const c = started();
+    const out = decide(input({ cfg: c, defense24h: { spentLamports: solToLamports(5), tokensBought: tokensToBase(12_500, DEC) } }));
+    expect(out.decisions.filter((d) => d.change.kind === "remove_level")).toEqual([]);
+    expect(out.lossRest).toBeDefined();
+    expect(out.escalations.map((e) => e.topic)).toContain("loss_limit");
+    const next = decide(fresh({ cfg: c, defense24h: { spentLamports: solToLamports(5), tokensBought: tokensToBase(12_500, DEC) }, lastLossLimitAt: T0 - HOUR }));
+    expect(kinds(next)).not.toContain("place_level");
+    expect(next.escalations.map((e) => e.topic)).not.toContain("loss_limit");
   });
 
   it("budget low forces one desk run, not one per tick", async () => {

@@ -18,7 +18,7 @@ export const VaultRulesSchema = z.object({
 export const StrategyConfigSchema = z.object({
   defense: z.object({
     enabled: z.boolean(),
-    levels: z.array(z.object({ price: z.number().positive(), budgetSol: z.number().min(0), pinned: z.boolean().optional(), placedAt: z.number().optional() })),
+    levels: z.array(z.object({ price: z.number().positive(), budgetSol: z.number().min(0), pinned: z.boolean().optional(), placedAt: z.number().optional(), rank: z.number().int().min(0).optional() })),
     maxDistanceBelowPct: z.number().min(1).max(90).optional(),
   }),
   distribution: z.object({

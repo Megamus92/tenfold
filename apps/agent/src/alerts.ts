@@ -106,13 +106,15 @@ export function formatEvent(ev: EngineEvent, cfg: ProjectConfig, ledger: LedgerR
     case "cap_reached": {
       const pct = n(d, "pct") ?? cfg.rules.dailySellCapPct;
       const sold = big(d, "soldTokens");
+      // Under a mandate paced at the cap this is the plan working, not a problem: one neutral line, no hint.
+      if (cfg.mandate) return `Today's ${fmtPct(pct)} sell cap is used${sold !== undefined ? ` (${fmtTokens(baseToTokens(sold, cfg.decimals))} tokens)` : ""}; selling resumes as the 24h window rolls over.`;
       return `Daily sell cap reached: ${fmtPct(pct)} of the vault${sold !== undefined ? ` (${fmtTokens(baseToTokens(sold, cfg.decimals))} tokens)` : ""} sold in the last 24h. Distribution waits until the window rolls over. Raising the cap takes 48h if you want more.`;
     }
     case "circuit_breaker": {
       const move = n(d, "movePct");
       const from = n(d, "from") ?? n(d, "price5mAgo");
       const to = n(d, "to") ?? n(d, "price");
-      return `Circuit breaker: price moved ${move !== undefined ? fmtPct(Math.abs(move)) : "more than " + fmtPct(cfg.rules.circuitBreakerMovePct)} in 5 minutes${from !== undefined && to !== undefined ? ` (${fmtPrice(from)} -> ${fmtPrice(to)})` : ""}. All orders are on hold until you say "resume" and confirm. Nothing is spent meanwhile.`;
+      return `Circuit breaker: price moved ${move !== undefined ? fmtPct(Math.abs(move)) : "more than " + fmtPct(cfg.rules.circuitBreakerMovePct)} in 5 minutes${from !== undefined && to !== undefined ? ` (${fmtPrice(from)} -> ${fmtPrice(to)})` : ""}. The project is paused: no order of any kind until you say "resume" and confirm. Nothing is spent meanwhile.`;
     }
     case "order_filled": {
       const reason = s(d, "reason");
@@ -142,6 +144,7 @@ export function formatEvent(ev: EngineEvent, cfg: ProjectConfig, ledger: LedgerR
     }
     case "paused": {
       const by = s(d, "by") ?? s(d, "reason");
+      if (by === "circuit breaker") return undefined; // the circuit_breaker line already says it
       return `Paused${by ? ` (${by})` : ""}. No new orders until resumed.`;
     }
     case "resumed":

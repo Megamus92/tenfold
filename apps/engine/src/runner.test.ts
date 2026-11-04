@@ -135,6 +135,31 @@ describe("ProjectRunner", () => {
     expect(h.ledger.listEvents("t1", { types: ["cap_reached"] })).toHaveLength(1);
   });
 
+  it("a circuit breaker pauses the project until the founder resumes it", async () => {
+    const h = harness(cfg({ distribution: { enabled: true, pctOfVaultPerDay: 0.5, mode: "strength" } }));
+    await h.runner.tick();
+    // six minutes of history, then a 40% drop in one tick: the next sell is rejected and the project pauses
+    for (let i = 0; i < 36; i++) {
+      h.advance(10_000);
+      await h.runner.tick();
+    }
+    h.feed.price = 0.0002 * 0.6;
+    h.advance(10_000);
+    h.ledger.enqueueCommand("t1", "manual_order", { side: "sell", amountIn: tokensToBase(100, DEC).toString() });
+    await h.runner.tick();
+    expect(h.ledger.listEvents("t1", { types: ["circuit_breaker"] }).length).toBeGreaterThanOrEqual(1);
+    expect(h.runner.cfg.paused).toBe(true);
+    expect(h.ledger.listEvents("t1", { types: ["paused"] })[0]?.data.by).toBe("circuit breaker");
+    // ten minutes later the move is out of the window; still paused, nothing trades
+    const fills = h.exec.fills.length;
+    for (let i = 0; i < 60; i++) {
+      h.advance(10_000);
+      await h.runner.tick();
+    }
+    expect(h.runner.cfg.paused).toBe(true);
+    expect(h.exec.fills.length).toBe(fills);
+  });
+
   it("pauses and resumes via commands, persisting and emitting once each", async () => {
     let persisted: ProjectConfig | undefined;
     const h = harness(cfg({ rebalance: { enabled: true, targetSolShare: 0.5, band: 0.05 } }));

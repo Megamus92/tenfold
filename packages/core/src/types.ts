@@ -51,6 +51,8 @@ export interface DefenseLevel {
   pinned?: boolean;
   /** When the desk placed this level (ms). Only DEF orders after this count against its budget, so a re-placed level starts fresh. */
   placedAt?: number;
+  /** The ladder rung this level stands on (0 = nearest the price). Set by the desk; a consumed rung is re-placed at its own rank. */
+  rank?: number;
 }
 
 export interface StrategyConfig {
@@ -254,7 +256,7 @@ export interface Snapshot {
   price: number;
   /** Pool liquidity on the SOL side, if known (SOL). */
   liquiditySol?: number;
-  /** Where the liquidity reading comes from: a pool reading (dex) or an estimate from quote impact (impact). Not persisted. */
+  /** Where the liquidity reading comes from: a pool reading (dex) or an estimate from quote impact (impact). */
   liquiditySource?: "dex" | "impact";
   /** Aggressor buy / sell volume over the last 5 minutes, in SOL, from the trade feed when available. */
   buyFlow5mSol: number;
