@@ -93,6 +93,8 @@
   .claims li{display:flex;align-items:flex-start;gap:11px}
   .claims li::before{content:"";flex:none;width:18px;height:18px;border-radius:50%;background:var(--brand-soft);margin-top:3px;
     background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 18 18'%3E%3Cpath d='M4.5 9.5l3 3 6-7' fill='none' stroke='%230F6B47' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");background-size:18px}
+  @media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .claims li::before{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 18 18'%3E%3Cpath d='M4.5 9.5l3 3 6-7' fill='none' stroke='%233FBF8C' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")}}
+  :root[data-theme="dark"] .claims li::before{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 18 18'%3E%3Cpath d='M4.5 9.5l3 3 6-7' fill='none' stroke='%233FBF8C' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")}
   .cta{display:flex;gap:12px;margin-top:30px;flex-wrap:wrap;align-items:center}
   .cta .note{font-size:13.5px;color:var(--muted);flex-basis:100%}
 
@@ -120,7 +122,7 @@
   @media(max-width:520px){.desk .body{grid-template-columns:1fr}}
   .desk .chart{padding:12px 8px 0 10px;min-width:0}
   .desk .rules{border-left:1px solid var(--desk-line);padding:12px 14px;font-family:var(--mono);font-size:11.5px;display:grid;gap:12px;align-content:start}
-  @media(max-width:520px){.desk .rules{border-left:none;border-top:1px solid var(--desk-line);grid-template-columns:1fr 1fr 1fr;gap:10px}}
+  @media(max-width:520px){.desk .rules{border-left:none;border-top:1px solid var(--desk-line);grid-template-columns:1fr 1fr;gap:10px 14px}.desk .bar .priv span{display:none}.desk .bar{font-size:12px}}
   .rule .k{color:var(--desk-muted);letter-spacing:.04em;text-transform:uppercase;font-size:10px}
   .rule .v{color:var(--desk-text);font-size:13px;margin-top:3px}
   .rule .m{height:4px;border-radius:2px;background:rgba(255,255,255,.08);margin-top:6px;overflow:hidden}
@@ -322,12 +324,12 @@
       <div class="mandate" aria-label="Example mandate">
         <div class="mh"><span>your mandate</span><b>set in 3 answers</b></div>
         <div class="chips"><span class="chip">Protect</span><span class="chip on">Balanced</span><span class="chip">Distribute</span></div>
-        <p class="line"><b>50% of the vault over 30 days.</b> Tell me under 0.00012. Daily sell cap 0.5%, defense budget 20 SOL, 5 SOL a day max.</p>
+        <p class="line"><b>50% of the vault over 100 days.</b> Tell me under 0.00012. Daily sell cap 0.5%, defense budget 20 SOL, 5 SOL a day max.</p>
       </div>
       <div class="desk" aria-label="Live view of the desk, as the founder sees it">
         <div class="bar">
           <span>tenfold · $DEMO / SOL</span>
-          <span class="priv"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>founder only</span>
+          <span class="priv"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg><span>founder only</span></span>
           <span class="live"><i></i>live</span>
         </div>
         <div class="body">
@@ -337,7 +339,7 @@
           <div class="rules" aria-label="The founder's limits, enforced on every order">
             <div class="rule"><div class="k">daily sell cap</div><div class="v num">0.50% · 31% used</div><div class="m"><b style="width:31%"></b></div></div>
             <div class="rule"><div class="k">defense budget</div><div class="v num">20 SOL · 14.2 left</div><div class="m"><b style="width:71%"></b></div></div>
-            <div class="rule"><div class="k">horizon</div><div class="v num">38% done · day 11/30</div><div class="m"><b style="width:38%"></b></div></div>
+            <div class="rule"><div class="k">horizon</div><div class="v num">38% done · day 36/100</div><div class="m"><b style="width:38%"></b></div></div>
             <div class="rule"><div class="k">today</div><div class="v num">+2.9 SOL fees</div></div>
           </div>
         </div>
@@ -370,9 +372,9 @@
       <p>No levels to set, no dashboard to watch. You tell the desk what matters, it derives the rest from your limits and the market, and keeps adjusting as things move.</p>
     </div>
     <div class="answers">
-      <div class="ans"><div class="q">1 · what matters most</div><h3>Protect, balance, or distribute?</h3><p>Protect holds the price first and sells slowly. Balanced holds reasonable levels and distributes steadily. Distribute moves supply first and defends lightly, further down.</p><div class="opts"><span>Protect</span><span class="on">Balanced</span><span>Distribute</span></div></div>
-      <div class="ans"><div class="q">2 · how much, how fast</div><h3>What share of the vault, over how many days?</h3><p>The desk turns this into a daily pace, speeds up when it falls behind and slows down when it runs ahead. Never above your daily sell cap.</p><div class="opts"><span>10%</span><span class="on">50%</span><span>100%</span><span>14 d</span><span class="on">30 d</span><span>90 d</span></div></div>
-      <div class="ans"><div class="q">3 · when to tell you</div><h3>A price under which you want to hear from it?</h3><p>Not a selling floor, just the line where you want a message. The desk halves distribution under it and tells you once, not every hour.</p><div class="opts"><span class="on">0.00012</span><span>none</span></div></div>
+      <div class="ans"><div class="q">1 · what matters most</div><h3>Protect, balance, or distribute?</h3><p>Protect keeps the ladder tight under the price and sells slowly. Balanced holds reasonable levels and distributes steadily. Distribute moves supply first and defends lightly, further down.</p><div class="opts"><span>Protect</span><span class="on">Balanced</span><span>Distribute</span></div></div>
+      <div class="ans"><div class="q">2 · how much, how fast</div><h3>What share of the vault, over how many days?</h3><p>The desk turns this into a daily pace, speeds up when it falls behind and slows down when it runs ahead. Never above your daily sell cap.</p><div class="opts"><span>10% · 30 d</span><span>25% · 60 d</span><span class="on">50% · 100 d</span><span>100% · 200 d</span></div></div>
+      <div class="ans"><div class="q">3 · when to tell you</div><h3>A price under which you want to hear from it?</h3><p>Not a hard floor, a line. Under it the desk stops selling and only buys, and tells you once, not every hour.</p><div class="opts"><span class="on">0.00012</span><span>none</span></div></div>
     </div>
     <p class="then">Then you fund the project wallet with tokens and SOL, and <b>the desk is trading within the hour.</b> Paper mode first if you want to watch it with nothing at stake.</p>
   </div>
@@ -386,11 +388,11 @@
       <p>Every decision below is made by the engine from rules, not by a chatbot, and reaches you as one line starting with "Desk:". You never have to answer.</p>
     </div>
     <div class="does">
-      <div class="do"><div class="k">defend</div><div><h3>Places levels under the price</h3><p>Trailing defense levels sit under a one-hour reference, wider when the market is wild so noise alone does not hit them, each with its own SOL budget inside your daily limit.</p></div><div class="say"><b>Desk:</b> Placed a defense level at 0.0001860 (7% under the 1h reference 0.0002000) with 5.00 SOL.</div></div>
-      <div class="do"><div class="k">breathe</div><div><h3>Steps down instead of burning</h3><p>When holding a level would eat the day's budget in a couple of hours, it lets the level breathe and re-places it lower. A level clearly lost is not chased down.</p></div><div class="say"><b>Desk:</b> Holding 0.0001860 costs about 3.8 SOL/hour at this flow and the budget would last 1.3 h. Letting it breathe: stepping the level down.</div></div>
-      <div class="do"><div class="k">rest</div><div><h3>Stays out of a falling market</h3><p>Two levels lost in a day and the defense rests for six hours, twelve after three. It does not buy into a trend with your treasury.</p></div><div class="say"><b>Desk:</b> Level 0.0001720 is lost: price is 16% under it. That is 2 levels lost in 24h, so the defense rests 6 h instead of buying into the trend.</div></div>
-      <div class="do"><div class="k">distribute</div><div><h3>Sells into real strength, on pace</h3><p>Leans into strong green candles, backs off when sellers dominate the hour, catches up when behind the horizon, never below your floor and never past your cap.</p></div><div class="say"><b>Desk:</b> Distribution pace 0.30% → 0.15% of the vault per day: sellers dominate this hour, not adding supply to that.</div></div>
-      <div class="do"><div class="k">protect</div><div><h3>Stops when something is wrong</h3><p>Pool liquidity gone, a team wallet selling, a 35% move in five minutes: everything halts, you get the facts, and nothing restarts without you.</p></div><div class="say"><b>Desk:</b> Pool liquidity dropped from 210 to 48 SOL within the hour. Everything is stopped: trading into a drained pool only loses.</div></div>
+      <div class="do"><div class="k">defend</div><div><h3>Places a ladder under the price</h3><p>Three trailing levels sit under a one-hour reference, spaced in units of the market's own volatility so noise alone does not hit them, the day's budget weighted to the deeper ones where buying is cheapest.</p></div><div class="say"><b>Desk:</b> Placed 3 defense levels at 0.0001900 (1.25 SOL), 0.0001800 (1.75 SOL), 0.0001650 (2.00 SOL): 5% to 18% under the 1h reference 0.0002000.</div></div>
+      <div class="do"><div class="k">breathe</div><div><h3>Steps down instead of burning</h3><p>When holding a level would eat the day's budget in a few hours, or when the last fifteen minutes are one-sided selling, it lets the level breathe and re-places it lower after a cooldown. A level clearly lost is not chased down.</p></div><div class="say"><b>Desk:</b> Holding 0.0001900 costs about 3.8 SOL/hour at this flow and the budget would last 1.3 h. Letting it breathe: stepping the level down.</div></div>
+      <div class="do"><div class="k">rest</div><div><h3>Stays out of a falling market</h3><p>Two levels lost in a day and the defense rests for six hours, twelve after three. A 10% drop in five minutes, or a day's mark-to-market loss past the profile's limit, rests it too. It does not buy into a trend with your treasury.</p></div><div class="say"><b>Desk:</b> Level 0.0001720 is lost: price is 16% under it. That is 2 levels lost in 24h, so the defense rests 6 h instead of buying into the trend.</div></div>
+      <div class="do"><div class="k">distribute</div><div><h3>Sells into real strength, on pace</h3><p>Leans into strong green candles, backs off when sellers dominate the hour, catches up when behind the horizon, never more than a tenth of the pool's real volume, never past your cap, never a dump at the end.</p></div><div class="say"><b>Desk:</b> Distribution pace 0.30% → 0.15% of the vault per day: sellers dominate this hour, not adding supply to that.</div></div>
+      <div class="do"><div class="k">protect</div><div><h3>Stops when something is wrong</h3><p>Pool liquidity gone, a team wallet selling, Tenfold becoming most of the pool's volume, a 35% move in five minutes: it halts, you get the facts, and nothing restarts without you.</p></div><div class="say"><b>Desk:</b> Pool liquidity dropped from about 210 to 48 SOL within the hour, confirmed on several readings. Everything is stopped: trading into a drained pool only loses.</div></div>
       <div class="do"><div class="k">report</div><div><h3>Reports every day, in numbers</h3><p>What sold and at what average against the token's own VWAP, what it cost to defend, where the horizon stands, what you earned in fees. A seven-day version every Monday.</p></div><div class="say">Sold: 12,500 tokens for 2.41 SOL @ 0.0001930 (+120 bps vs token VWAP) · Bought: 71,000 tokens for 14.8 SOL (defense) · Fees: 0.09 SOL</div></div>
     </div>
 
@@ -412,18 +414,18 @@
         <div class="ph"><div class="av">t</div><div class="nm">Tenfold · $DEMO<small>online · live mode</small></div></div>
         <div class="msgs">
           <div class="msg bot">Welcome. One question at a time. What matters most right now?<div class="kb"><span>Protect</span><span class="on">Balanced</span><span>Distribute</span></div><span class="t">09:12 UTC</span></div>
-          <div class="msg bot">How much of the vault, over how long?<div class="kb"><span>10% · 30 d</span><span class="on">50% · 30 d</span><span>100% · 60 d</span></div><span class="t">09:12 UTC</span></div>
+          <div class="msg bot">How much of the vault, over how long?<div class="kb"><span>10% · 30 d</span><span>25% · 60 d</span><span class="on">50% · 100 d</span></div><span class="t">09:12 UTC</span></div>
+          <div class="msg bot">Mandate set: hold reasonable levels and distribute steadily, 50% of the vault over 100 days, keep about 30% of the vault in SOL. The desk takes it from here. Optional: a price under which you want to be told.<span class="t">09:12 UTC</span></div>
           <div class="msg me">tell me under 0.00012<span class="t">09:13</span></div>
-          <div class="msg bot">Mandate set: hold reasonable levels and distribute steadily, 50% of the vault over 30 days, tell you under 0.00012. At your 0.5% cap that takes about 100 days, not 30; I'll go at the cap. Raise the cap (48 h), extend the horizon, or accept?<span class="t">09:13 UTC</span></div>
-          <div class="msg me">extend to 90 days<span class="t">09:14</span></div>
-          <div class="msg bot">Desk: Placed a defense level at 0.0001860 (7% under the 1h reference) with 5.00 SOL.<span class="t">09:15 UTC</span></div>
+          <div class="msg bot">Noted: under 0.00012 I stop selling, keep defending, and tell you once.<span class="t">09:13 UTC</span></div>
+          <div class="msg bot">Desk: Placed 3 defense levels at 0.0001900 (1.25 SOL), 0.0001800 (1.75 SOL), 0.0001650 (2.00 SOL): 5% to 18% under the 1h reference 0.0002000.<span class="t">09:15 UTC</span></div>
           <div class="msg bot">Desk: Distribution pace 0.50% → 0.62%: buyers dominate this hour.<span class="t">14:40 UTC</span></div>
           <div class="msg bot call">Your call: the defense budget is used up (0.4 SOL left of 20). Levels are resting; distribution continues. Options: top up the budget / send more SOL / leave it resting.<span class="t">Tue 11:02 UTC</span></div>
         </div>
       </div>
       <div class="demo-notes">
         <div class="dn"><div class="n">a</div><div><h3>Onboarding is three taps</h3><p>Profile, share and horizon, alert line. The desk derives levels, budgets and pace from your limits; you never type a price unless you want to.</p></div></div>
-        <div class="dn"><div class="n">b</div><div><h3>It tells you when the numbers don't add up</h3><p>Ask for more than your cap allows and it says so once, with the three honest ways out. No silent failure, no pretending.</p></div></div>
+        <div class="dn"><div class="n">b</div><div><h3>It tells you when the numbers don't add up</h3><p>Ask for more than your cap allows and it says so once, with the three honest ways out: raise the cap, extend the horizon, or accept the pace. No silent failure, no pretending.</p></div></div>
         <div class="dn"><div class="n">c</div><div><h3>Decisions arrive as one line</h3><p>"Desk:" lines are information, not questions. Read them or don't; the daily report has it all.</p></div></div>
         <div class="dn"><div class="n">d</div><div><h3>"Your call" is rare, and it waits</h3><p>Only the irreversible comes to you, with options. Pause is instant from your side at any time, and you can always take a level by hand: the desk never touches one you set.</p></div></div>
       </div>
@@ -498,7 +500,7 @@
       <details><summary>Can the desk run off with my tokens?<span class="pm">+</span></summary><div class="a">No. It trades from a wallet you fund, with a key that can only swap and provide liquidity. It cannot withdraw. Funds settle back to the wallet you registered at setup, only after the delay you chose, and you can pause everything from Telegram at any moment.</div></details>
       <details><summary>Do I really not have to watch it?<span class="pm">+</span></summary><div class="a">You don't. The desk places and moves levels, paces distribution and handles bad hours by itself, and tells you in one line each time. It only asks you for the five things it cannot decide alone: more budget, a cap raise, a liquidity pull, a team wallet selling, the target reached. If you prefer to approve each change, switch it to "ask" mode.</div></details>
       <details><summary>Will it pump my chart?<span class="pm">+</span></summary><div class="a">No. Tenfold provides real liquidity and sells your supply into real demand. It does not trade against itself or manufacture volume. That is what keeps you clean, and it is also what actually earns you a better average price than dumping.</div></details>
-      <details><summary>What happens if the price crashes?<span class="pm">+</span></summary><div class="a">It defends inside the budget you set and stops chasing once a level is clearly lost. After two lost levels in a day it rests the defense for hours rather than buying into the trend. A circuit breaker holds all orders on a 35% move in five minutes. You get the facts, and the defense comes back on its own when the market calms.</div></details>
+      <details><summary>What happens if the price crashes?<span class="pm">+</span></summary><div class="a">It defends inside the budget you set and stops chasing once a level is clearly lost. After two lost levels in a day it rests the defense for hours rather than buying into the trend; a 10% drop in five minutes or a day's loss past the profile's limit rests it too, and a 35% move in five minutes holds every order. You get the facts, and the defense comes back on its own when the market calms.</div></details>
       <details><summary>Who can see what it's doing?<span class="pm">+</span></summary><div class="a">You. Your mandate, levels, sizes, timing and wallet are private, shown only on your own live feed and through your bot. On-chain, a Tenfold trade looks like any other trade. Clip sizes and timing are varied so nobody can front-run the desk.</div></details>
       <details><summary>Can I still take control by hand?<span class="pm">+</span></summary><div class="a">Yes. Any level you set yourself is pinned: the desk never moves or removes it. Pause is instant. Lowering your cap or budget is instant. Raising the cap takes 48 hours by design. And you can change the mandate at any time in one message.</div></details>
       <details><summary>Can I try it without real money?<span class="pm">+</span></summary><div class="a">Yes. Every project can start in paper mode: real prices, simulated fills, nothing spent. Switch to live when you are comfortable. In the beta, live vaults start small on purpose.</div></details>
