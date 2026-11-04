@@ -29,12 +29,13 @@ Honest status for the beta, after two independent code reviews and the fixes app
 
 ## The desk manager (autonomy)
 
-- The desk's decisions are engine rules, not a model: `apps/engine/src/desk.ts` is deterministic and unit-tested, and every order it causes still passes the risk engine. It cannot exceed the founder's cap, budgets or floor.
-- In a volatile market the desk WILL spend the daily defense limit most days: the levels sit 1.5 realized sigmas under the price and get hit. `maxDefenseSpendPerDaySol` is therefore the number to size with the founder, not the lifetime budget.
-- Trend protection rests the defense after 2 lost levels in 24h (6h, doubling per further loss). A slow bleed that loses one level a day is not caught by it; the daily limit is the bound.
-- Flows and the pool liquidity reading come from DexScreener. If it is down, flows read 0: distribution's strength signal never fires (fail-safe, nothing sells) and the liquidity-pull stop cannot see a drain (the impact estimate from Jupiter remains, refreshed every minute).
-- `ask` mode announces proposals only; applying them goes through the normal confirmed tools.
-- The desk writes the project file (strategy + mandate bookkeeping) after re-reading it, so an agent edit saved a moment earlier is kept; a founder edit landing in the same second could still be overwritten by the desk's write. Low likelihood, worth a file lock before many projects run.
+- The desk's decisions are engine rules, not a model: `apps/engine/src/desk.ts` is deterministic and unit-tested, and every order it causes still passes the risk engine. It cannot exceed the founder's cap, budgets or slippage limits.
+- In a volatile market the ladder gets hit most days. The breathe rule, the cooldown after a consumed level, the rest after repeated losses and the daily mark-to-market loss limit bound the damage; `maxDefenseSpendPerDaySol` and the loss limit are the numbers to size with the founder, not the lifetime budget. A slow bleed that loses one level a day is caught by the loss limit, not by the rest rule.
+- The liquidity-pull stop needs several readings on both ends of the hour (DexScreener's pool reading first, Jupiter's impact estimate as fallback). A single bad quote cannot pause a project; a real drain is seen within a few minutes.
+- Flows come from DexScreener. If it is down, flows read 0: distribution's strength signal never fires (fail-safe, nothing sells), the participation cap reads zero volume (nothing sells), and the own-share stop cannot compute. The desk then only defends.
+- `ask` mode: the desk proposes once (no repeats within 6h) and applies only its bookkeeping and the safety pause; applying a proposal goes through the normal confirmed tools (set_defense_level pins the level, set_mandate changes the plan). There is no one-tap "apply proposal" yet.
+- The desk re-reads the project file before writing it and, if the file changed under it (an agent save), adopts the founder's version and decides again next tick. Saves are atomic (temp file + rename). A `reload` that fails is retried for five ticks.
+- The desk writes `projects/<id>.json` autonomously: the file is state, not just configuration. Back it up with the ledger.
 
 ## The core beta caveat
 
@@ -48,7 +49,7 @@ The daily cap, the defense budget and the withdrawal delay are enforced by the e
 - MEDIUM: onboarding uses the same signed message for login and for team-wallet declaration, so a collected teammate signature could be replayed to log in as that wallet. Give declarations a distinct message prefix (client + server) before onboard handles anyone but us.
 - MEDIUM: the marketing hype-word guard ignores the project name and handle, so a project named "BUY NOW 100x" would still post. Screen the name/handle at onboarding.
 - MEDIUM: in `approve` marketing mode a badge downgrade is only a draft the founder can let expire; run badge posts in `auto` mode (or post downgrades yourself) so they can't be suppressed.
-- MEDIUM: per-level defense budgets are tracked over a rolling 24h while the agent presents them as fixed allocations; only the lifetime budget is a hard bound. Make level budgets daily or lifetime.
+- MEDIUM: a founder-set (pinned) level's budget is tracked over a rolling 24h of orders while the agent presents it as a fixed allocation; desk-placed levels carry a `placedAt` and count only orders after it. Only the lifetime and daily budgets are hard bounds.
 - MEDIUM: the priority-fee cap (default ~15,000 lamports) is low; raise `TENFOLD_PRIORITY_FEE_MICROLAMPORTS` for busy tokens or live swaps will expire.
 - LOW: no reconciler for orders stuck `approved`/`sent` after a crash; coverage freezes at its last tier on a reader failure (never falsely downgrades, but can go stale); `unsweptFees` blocks a project's sweep once any paper row exists (a paper→live project needs its paper fee rows cleared); onboarding sessions are in memory with no per-IP rate limit; a Telegram API error body can embed the bot token in a stored post error; the proof pill still reads "Managed by Tenfold" for beta projects (the `beta` tier shows beside it) — reword the pill to say beta.
 

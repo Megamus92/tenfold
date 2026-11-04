@@ -64,6 +64,10 @@ Then, from the founder's private Telegram chat: `/start demo <bindCode>`. The bo
 - Logs are JSON lines; `docker compose logs engine | grep '"level":"error"'` for a quick triage.
 - Priority fees: raise `TENFOLD_PRIORITY_FEE_MICROLAMPORTS` for busy tokens or live swaps expire. Jito tips are optional (`TENFOLD_JITO_URL`).
 
+## 5b. What the founder sees on day one
+
+`/start <id> <bindCode>` → two taps (profile, then share and horizon) → "Mandate set" → within a minute "Desk: Placed 3 defense levels at ..." and a pace line → one line per decision after that, a report every morning at 09:00 local, a 7-day report on Mondays. "Your call:" messages are the only ones that wait for an answer.
+
 ## 6. Before any founder money (ranked, from KNOWN-RISKS.md)
 
 - HIGH: keep web onboarding off the public internet until wallet creation moves into the engine.
