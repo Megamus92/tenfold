@@ -27,6 +27,15 @@ Honest status for the beta, after two independent code reviews and the fixes app
 - Marketing: `TENFOLD_MARKETING_ALLOW_PAPER` is ignored outside a dry run, so simulated numbers never reach real channels; posts are templates over ledger numbers; milestones need a real crossed threshold; downgrades bypass rate limits.
 - Coverage: `gold` is impossible without `mode:live` AND an on-chain vault (today the max tier is `beta`); any insider sell in 30 days forces `flagged`; the check can't crash the engine loop.
 
+## The desk manager (autonomy)
+
+- The desk's decisions are engine rules, not a model: `apps/engine/src/desk.ts` is deterministic and unit-tested, and every order it causes still passes the risk engine. It cannot exceed the founder's cap, budgets or floor.
+- In a volatile market the desk WILL spend the daily defense limit most days: the levels sit 1.5 realized sigmas under the price and get hit. `maxDefenseSpendPerDaySol` is therefore the number to size with the founder, not the lifetime budget.
+- Trend protection rests the defense after 2 lost levels in 24h (6h, doubling per further loss). A slow bleed that loses one level a day is not caught by it; the daily limit is the bound.
+- Flows and the pool liquidity reading come from DexScreener. If it is down, flows read 0: distribution's strength signal never fires (fail-safe, nothing sells) and the liquidity-pull stop cannot see a drain (the impact estimate from Jupiter remains, refreshed every minute).
+- `ask` mode announces proposals only; applying them goes through the normal confirmed tools.
+- The desk writes the project file (strategy + mandate bookkeeping) after re-reading it, so an agent edit saved a moment earlier is kept; a founder edit landing in the same second could still be overwritten by the desk's write. Low likelihood, worth a file lock before many projects run.
+
 ## The core beta caveat
 
 The daily cap, the defense budget and the withdrawal delay are enforced by the engine, not yet on-chain. Until `programs/vault` is built, deployed and audited, a founder trusts Tenfold's process, not a contract. Beta vaults stay small (under 100 SOL and 5% of supply) and start with our own launches. The badge reads `beta` until the audited vault is live; keep it that way.

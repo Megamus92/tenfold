@@ -42,12 +42,12 @@ Run the onboarding on the host, with the CLI (do NOT expose the web onboarding i
 docker compose run --rm engine npm run wallet:new -- --label demo        # prints the project wallet pubkey
 docker compose run --rm engine npm run project:add -- --id demo --name "Demo" --mint <MINT> --decimals 6 \
   --wallet <PUBKEY> --mode paper --cap 0.5 --budget 20 --budget-day 5 --delay 24 \
-  --level 0.00020:10 --dist 0.3:strength --min-price 0.00015 --strength-boost 3
+  --mandate balanced --horizon-days 60 --distribute-pct 50 --alert-floor 0.00015
 docker compose up -d engine agent
 docker compose logs -f engine
 ```
 
-Then, from the founder's private Telegram chat: `/start demo <bindCode>`, `/status`, and talk to it. Paper mode quotes real prices and simulates fills; nothing is spent.
+Then, from the founder's private Telegram chat: `/start demo <bindCode>`. The bot asks the two mandate questions with buttons (or `/mandate` later), then `/status` and plain talk. Paper mode quotes real prices and simulates fills; nothing is spent. An unfunded wallet gets one "fund it" message a day and nothing else.
 
 ## 4. Going live, small size, our own token first
 

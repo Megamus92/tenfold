@@ -133,7 +133,7 @@
   .feed .t{color:var(--desk-muted)}
   .feed .x{color:#DCE6E0;min-width:0}
   .feed .x b{font-weight:500}
-  .feed .x b.buy{color:var(--brand-bright)} .feed .x b.sell{color:var(--sell)} .feed .x b.desk{color:#F0D08A}
+  .feed .x b.buy{color:var(--brand-bright)} .feed .x b.sell{color:var(--sell)} .feed .x b.dk{color:#F0D08A}
   .deskcap{font-size:13.5px;color:var(--muted);margin-top:14px;text-align:center}
 
   /* strip */
@@ -169,7 +169,7 @@
   .do h3{font-size:19px}
   .do p{color:var(--ink-2);margin-top:6px;font-size:15.5px;max-width:48ch}
   .do .say{font-family:var(--mono);font-size:12.8px;color:var(--ink-2);background:var(--paper-2);border-radius:12px;padding:12px 14px;line-height:1.5;border:1px solid var(--line)}
-  .do .say b{color:#8A6314;font-weight:500}
+  .do .say b{color:#6E4D0E;font-weight:600}
   :root[data-theme="dark"] .do .say b,:root:not([data-theme="light"]) .do .say b{color:#F0D08A}
 
   /* your call */
@@ -396,8 +396,8 @@
 
     <div class="lead" style="margin-top:72px">
       <span class="eyebrow">when it asks you</span>
-      <h2>Five things, and only these.</h2>
-      <p>Anything it cannot undo or cannot bound on its own comes to you as a short question with the options. Everything else, it handles.</p>
+      <h2>Five decisions, and only these.</h2>
+      <p>Anything it cannot undo or cannot bound on its own comes to you as a short question with the options. Everything else it handles, and it sends a heads-up, not a question, when it rests the defense in a falling market or when price sits under your alert line.</p>
     </div>
     <div class="calls">
       <div class="call"><div class="k">your call</div><h3>Budget used up</h3><p>The defense budget you set is spent. Top it up, send more SOL, or leave the defense resting.</p></div>
@@ -579,10 +579,10 @@
   function pad2(x){return (x<10?"0":"")+x;}
   var t=new Date(); t.setHours(13,42,8,0);
   var deskLines=[
-    "<b class='desk'>Desk:</b> distribution pace 0.50% → 0.62%: buyers dominate this hour.",
-    "<b class='desk'>Desk:</b> letting 0.000186 breathe: holding costs 3.8 SOL/h, stepping the level down.",
-    "<b class='desk'>Desk:</b> placed a defense level at 0.000171 with 5.00 SOL.",
-    "<b class='desk'>Desk:</b> trailing the level up to 0.000190: price held 14% above for 3 h."
+    "<b class='dk'>Desk:</b> distribution pace 0.50% → 0.62%: buyers dominate this hour.",
+    "<b class='dk'>Desk:</b> letting 0.000186 breathe: holding costs 3.8 SOL/h, stepping the level down.",
+    "<b class='dk'>Desk:</b> placed a defense level at 0.000171 with 5.00 SOL.",
+    "<b class='dk'>Desk:</b> trailing the level up to 0.000190: price held 14% above for 3 h."
   ];
   var di=0, seq=0;
   function mk(kind){

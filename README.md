@@ -4,6 +4,21 @@ Self-serve market maker: the founder deposits tokens and SOL in a project wallet
 
 What Tenfold never does: trade against itself, print volume, hide holdings, fake engagement. Every order carries a reason code (DEF, DIST, REB, LP, MANUAL) and passes the risk engine (daily cap, defense budget, pace, slippage, circuit breaker).
 
+## The mandate and the desk manager
+
+A founder does not set levels. He gives a mandate (three answers) and the desk manager inside the engine does the rest:
+
+| The founder says | The desk does |
+| --- | --- |
+| profile: `protect`, `balanced` or `distribute` | places 1 or 2 trailing defense levels under the 1h reference price (wider in a volatile market), re-places a lost level lower, lets a level breathe when holding it would burn the day's budget, rests the defense 6/12/24 h after 2/3/4 levels lost in a day |
+| share and horizon: "50% of the vault over 60 days" | sets the daily distribution pace (never above the daily sell cap), catches up when behind, slows down when ahead, halves it when sellers dominate the hour, stops it after a team wallet sold |
+| alert floor (optional) | halves distribution under it and says so once |
+| autonomy: `auto` (default) or `ask` | applies decisions and announces them in one line ("Desk: ..."), or proposes and waits |
+
+It escalates only what it cannot decide: defense budget used up, no SOL in the wallet, a horizon the cap cannot reach, a liquidity pull (everything paused), a team wallet selling, the target reached. Levels the founder sets himself through the agent are pinned and never touched. `apps/engine/src/desk.ts` is pure and tested (`desk.test.ts`); the runner applies its output every 15 minutes or at once when a detector fires.
+
+On Telegram the mandate is two taps (`/mandate`): profile, then share and horizon. The alert line is one typed sentence ("tell me under 0.00012").
+
 ## Layout
 
 | Part | Path | Runs as |
@@ -40,12 +55,12 @@ npm test
 npm run wallet:new -- --label mytoken          # prints the public key
 
 # 2. the project file (paper mode: real prices, simulated fills). Prints a bind code at the end: keep it.
-#    --strength-boost makes the bot sell harder into strong real up-moves (bounded by the cap); omit for flat clips.
+#    With --mandate the desk manager places the levels and sets the pace itself (recommended).
 npm run project:add -- --id mytoken --name "My Token" --mint <MINT> --decimals 6 \
   --wallet <PUBKEY_FROM_STEP_1> --mode paper \
   --cap 0.5 --budget 20 --budget-day 5 --delay 24 \
-  --level 0.00020:10 --level 0.00015:10 \
-  --dist 0.3:strength --min-price 0.00012 --strength-boost 3
+  --mandate balanced --horizon-days 60 --distribute-pct 50 --alert-floor 0.00012
+#    Manual alternative (no desk): --level 0.00020:10 --dist 0.3:strength --min-price 0.00012 --strength-boost 3
 
 # 3. start the processes. ONE engine only (it takes an exclusive lock on the ledger); agent and proof alongside.
 npm run engine
