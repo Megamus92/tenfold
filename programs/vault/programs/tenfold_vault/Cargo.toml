@@ -1,0 +1,26 @@
+[package]
+name = "tenfold_vault"
+version = "0.1.0"
+description = "Tenfold vault: on-chain guard rails that make the 'Managed by Tenfold' badge verifiable"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "tenfold_vault"
+
+[features]
+default = []
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+# TEST ONLY. Shrinks every time constant (24h -> 10s, 48h -> 20s, 7d -> 70s) and
+# lets `delegate_swap` / `place_lp_asks` pass through to any allowlisted program
+# (the tests use the Memo program as a no-op "swap"). NEVER ship a mainnet
+# artifact built with this feature; `anchor build` without flags never enables it.
+testing = []
+
+[dependencies]
+anchor-lang = { version = "0.30.1", features = ["init-if-needed"] }
+anchor-spl = { version = "0.30.1", features = ["token", "associated_token"] }

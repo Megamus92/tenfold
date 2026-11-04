@@ -1,0 +1,88 @@
+services:
+  engine:
+    build: .
+    command: npm run engine
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+      - ./projects:/app/projects
+    restart: unless-stopped
+
+  # The agent and the proof page share the ledger but must never see the keystore: the keys directory is masked with
+  # an empty tmpfs and the keystore password is blanked, whatever .env contains.
+  agent:
+    build: .
+    command: npm run agent
+    env_file: .env
+    environment:
+      TENFOLD_KEYSTORE_PASSWORD: ""
+    volumes:
+      - ./data:/app/data
+      - ./projects:/app/projects
+    tmpfs:
+      - /app/data/keys
+    restart: unless-stopped
+    depends_on:
+      - engine
+
+  proof:
+    build: .
+    command: npm run proof
+    env_file: .env
+    environment:
+      TENFOLD_KEYSTORE_PASSWORD: ""
+    ports:
+      - "8787:8787"
+    volumes:
+      - ./data:/app/data:ro
+      - ./projects:/app/projects:ro
+    tmpfs:
+      - /app/data/keys
+    restart: unless-stopped
+    depends_on:
+      - engine
+
+  # Web onboarding: creates project wallets, so it keeps the keystore password and a writable keys dir. It only ever
+  # encrypts a fresh key (never decrypts or signs). Put it behind HTTPS before exposing it.
+  onboard:
+    build: .
+    command: npm run onboard
+    env_file: .env
+    ports:
+      - "8788:8788"
+    volumes:
+      - ./data:/app/data
+      - ./projects:/app/projects
+    restart: unless-stopped
+
+  # Public trader bot: read-only on the ledger, same keystore masking as the agent.
+  trader-bot:
+    build: .
+    command: npm run trader-bot
+    env_file: .env
+    environment:
+      TENFOLD_KEYSTORE_PASSWORD: ""
+    volumes:
+      - ./data:/app/data
+      - ./projects:/app/projects:ro
+    tmpfs:
+      - /app/data/keys
+    restart: unless-stopped
+    depends_on:
+      - engine
+
+  # Marketing: reads the ledger, drafts posts, publishes approved ones to X and Telegram channels. No key access.
+  marketing:
+    build: .
+    command: npm run marketing
+    env_file: .env
+    environment:
+      TENFOLD_KEYSTORE_PASSWORD: ""
+    volumes:
+      - ./data:/app/data
+      - ./projects:/app/projects:ro
+    tmpfs:
+      - /app/data/keys
+    restart: unless-stopped
+    depends_on:
+      - engine

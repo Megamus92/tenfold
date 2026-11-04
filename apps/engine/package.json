@@ -1,0 +1,17 @@
+{
+  "name": "@tenfold/engine",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/main.js",
+  "scripts": {
+    "build": "tsc -b",
+    "start": "node --no-warnings dist/main.js"
+  },
+  "dependencies": {
+    "@tenfold/core": "0.1.0",
+    "@tenfold/coverage": "0.1.0",
+    "@tenfold/exec": "0.1.0",
+    "@tenfold/strategies": "0.1.0"
+  }
+}

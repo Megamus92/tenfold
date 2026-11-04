@@ -1,0 +1,15 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/core" },
+    { "path": "packages/exec" },
+    { "path": "packages/strategies" },
+    { "path": "packages/coverage" },
+    { "path": "apps/engine" },
+    { "path": "apps/agent" },
+    { "path": "apps/proof" },
+    { "path": "apps/trader-bot" },
+    { "path": "apps/marketing" },
+    { "path": "apps/onboard" }
+  ]
+}

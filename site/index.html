@@ -1,0 +1,628 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta property="og:title" content="Tenfold: give it a mandate, it runs the market">
+<meta property="og:description" content="A market-making desk for your Solana token. Three answers, a wallet it can never withdraw from, and it defends, distributes and reports on its own.">
+<meta name="theme-color" content="#F4F2EC">
+<title>Tenfold</title>
+<meta name="description" content="Tenfold is a market-making desk for your Solana token. Give it a mandate, fund a wallet it can never withdraw from, and it defends, distributes and reports on its own.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,600;12..96,700;12..96,800&family=IBM+Plex+Mono:wght@400;500;600&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  /* Layout concept: a desk ledger on warm paper. One dark terminal surface for the product, hairline rows for facts,
+     deep green for the brand (trust, money), amber only where the founder's attention is asked. */
+  :root{
+    --paper:#F4F2EC; --paper-2:#EBE7DD; --paper-3:#E2DDD0; --card:#FFFFFF;
+    --ink:#16140F; --ink-2:#4A463C; --muted:#78725F; --line:#DCD6C7; --line-strong:#16140F;
+    --desk:#0E1511; --desk-2:#141C17; --desk-line:rgba(255,255,255,.10); --desk-text:#E7EEE9; --desk-muted:#8C9A92;
+    --brand:#0F6B47; --brand-ink:#0C5A3C; --brand-soft:#DDEFE5; --brand-bright:#2BB37A;
+    --amber:#B4791F; --amber-soft:#F5E7CC; --sell:#C7483F;
+    --display:"Bricolage Grotesque","Instrument Sans",system-ui,sans-serif;
+    --body:"Instrument Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+    --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+    --maxw:1160px;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --paper:#101311; --paper-2:#171C19; --paper-3:#1E2521; --card:#161C18;
+      --ink:#ECEAE2; --ink-2:#C7C4B8; --muted:#9A968A; --line:#2A312C; --line-strong:#ECEAE2;
+      --desk:#0A0F0C; --desk-2:#111814; --desk-line:rgba(255,255,255,.10); --desk-text:#E7EEE9; --desk-muted:#8C9A92;
+      --brand:#3FBF8C; --brand-ink:#5ED1A2; --brand-soft:rgba(63,191,140,.14); --brand-bright:#3FBF8C;
+      --amber:#D5A24A; --amber-soft:rgba(213,162,74,.16); --sell:#E0665E;
+      color-scheme:dark;
+    }
+  }
+  :root[data-theme="dark"]{
+    --paper:#101311; --paper-2:#171C19; --paper-3:#1E2521; --card:#161C18;
+    --ink:#ECEAE2; --ink-2:#C7C4B8; --muted:#9A968A; --line:#2A312C; --line-strong:#ECEAE2;
+    --desk:#0A0F0C; --desk-2:#111814; --desk-line:rgba(255,255,255,.10); --desk-text:#E7EEE9; --desk-muted:#8C9A92;
+    --brand:#3FBF8C; --brand-ink:#5ED1A2; --brand-soft:rgba(63,191,140,.14); --brand-bright:#3FBF8C;
+    --amber:#D5A24A; --amber-soft:rgba(213,162,74,.16); --sell:#E0665E;
+    color-scheme:dark;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth;-webkit-text-size-adjust:100%}
+  body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--body);font-size:17px;line-height:1.55;-webkit-font-smoothing:antialiased}
+  body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:10;background:var(--paper)}
+  a{color:inherit;text-decoration:none}
+  .wrap{max-width:var(--maxw);margin:0 auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+  @media(min-width:760px){.wrap{padding-left:max(28px,env(safe-area-inset-left,0px));padding-right:max(28px,env(safe-area-inset-right,0px))}}
+  .num{font-variant-numeric:tabular-nums}
+  h1,h2,h3{font-family:var(--display);margin:0;line-height:1.02;letter-spacing:-.025em;text-wrap:balance}
+  h1{font-size:clamp(42px,6.4vw,80px);font-weight:800;letter-spacing:-.035em}
+  h2{font-size:clamp(30px,4vw,48px);font-weight:700}
+  h3{font-size:21px;font-weight:600;letter-spacing:-.015em;line-height:1.2}
+  p{margin:0}
+  .eyebrow{font-family:var(--mono);font-size:12.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--brand-ink);display:inline-flex;align-items:center;gap:8px}
+  .eyebrow::before{content:"";width:8px;height:8px;border-radius:2px;background:var(--brand)}
+  .lede{font-size:clamp(17px,1.5vw,19.5px);color:var(--ink-2);max-width:54ch}
+  :focus-visible{outline:2px solid var(--brand);outline-offset:3px;border-radius:4px}
+
+  /* logo */
+  .word{font-family:var(--display);font-weight:800;font-size:21px;letter-spacing:-.03em;display:inline-flex;align-items:center;gap:9px;color:var(--ink)}
+  .word svg{width:24px;height:24px;flex:none}
+  .word .mk{fill:var(--brand)} .word .fold{fill:var(--brand-bright)}
+
+  /* buttons */
+  .btn{display:inline-flex;align-items:center;gap:10px;font-family:var(--body);font-weight:600;font-size:15.5px;padding:13px 20px;border-radius:999px;background:var(--ink);color:var(--paper);border:1px solid var(--ink);cursor:pointer;transition:transform .12s ease,background .2s,color .2s;white-space:nowrap}
+  .btn:hover{transform:translateY(-1px)}
+  .btn .tg{width:18px;height:18px;flex:none}
+  .btn.ghost{background:transparent;color:var(--ink)}
+  .btn.ghost:hover{background:var(--ink);color:var(--paper)}
+  .btn.brand{background:var(--brand);border-color:var(--brand);color:#fff}
+  .btn.brand:hover{background:var(--brand-ink);border-color:var(--brand-ink)}
+
+  /* nav */
+  nav{position:sticky;top:env(safe-area-inset-top,0px);z-index:40;backdrop-filter:blur(10px);background:color-mix(in srgb,var(--paper) 86%,transparent);border-bottom:1px solid var(--line)}
+  .nav{display:flex;align-items:center;justify-content:space-between;height:66px;gap:16px}
+  .nlinks{display:flex;align-items:center;gap:26px}
+  .nlinks a.l{font-size:14.5px;color:var(--ink-2);font-weight:500}
+  .nlinks a.l:hover{color:var(--ink)}
+  @media(max-width:900px){.nlinks a.l{display:none}}
+
+  /* hero */
+  .hero{padding:56px 0 18px}
+  .hero-grid{display:grid;grid-template-columns:1fr 1fr;gap:44px;align-items:center}
+  @media(max-width:960px){.hero-grid{grid-template-columns:1fr;gap:34px}}
+  .hero h1{margin-top:18px}
+  .hero .lede{margin-top:22px}
+  .claims{list-style:none;padding:0;margin:24px 0 0;display:grid;gap:9px;font-size:15.5px;color:var(--ink-2)}
+  .claims li{display:flex;align-items:flex-start;gap:11px}
+  .claims li::before{content:"";flex:none;width:18px;height:18px;border-radius:50%;background:var(--brand-soft);margin-top:3px;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 18 18'%3E%3Cpath d='M4.5 9.5l3 3 6-7' fill='none' stroke='%230F6B47' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");background-size:18px}
+  .cta{display:flex;gap:12px;margin-top:30px;flex-wrap:wrap;align-items:center}
+  .cta .note{font-size:13.5px;color:var(--muted);flex-basis:100%}
+
+  /* product surface: mandate card + desk */
+  .stack{display:grid;gap:14px}
+  .mandate{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px 18px;display:grid;gap:12px;box-shadow:0 18px 40px -34px rgba(20,18,14,.5)}
+  .mandate .mh{display:flex;justify-content:space-between;align-items:center;font-family:var(--mono);font-size:11.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)}
+  .mandate .mh b{color:var(--brand-ink);font-weight:500}
+  .chips{display:flex;gap:8px;flex-wrap:wrap}
+  .chip{font-family:var(--mono);font-size:12.5px;padding:7px 11px;border-radius:999px;border:1px solid var(--line);color:var(--ink-2);background:var(--paper)}
+  .chip.on{background:var(--brand);border-color:var(--brand);color:#fff}
+  .mandate .line{font-size:14.5px;color:var(--ink-2)}
+  .mandate .line b{color:var(--ink);font-weight:600}
+
+  .desk{position:relative;border-radius:18px;background:var(--desk);color:var(--desk-text);overflow:hidden;border:1px solid #0a0f0c;
+        box-shadow:0 1px 0 rgba(255,255,255,.35),0 34px 64px -30px rgba(10,20,14,.55),0 10px 24px -18px rgba(0,0,0,.5)}
+  .desk::before{content:"";position:absolute;inset:0;background:radial-gradient(110% 80% at 90% -10%,rgba(63,191,140,.16),transparent 55%);pointer-events:none}
+  .desk .bar{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--desk-line);font-family:var(--mono);font-size:12.5px;color:var(--desk-muted);gap:10px}
+  .desk .bar .live{display:inline-flex;align-items:center;gap:8px;color:var(--brand-bright)}
+  .desk .bar .live i{width:7px;height:7px;border-radius:50%;background:var(--brand-bright);animation:pulse 2.4s infinite}
+  .desk .bar .priv{display:inline-flex;align-items:center;gap:6px}
+  .desk .bar .priv svg{width:12px;height:12px}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(63,191,140,.5)}70%{box-shadow:0 0 0 7px rgba(63,191,140,0)}100%{box-shadow:0 0 0 0 rgba(63,191,140,0)}}
+  .desk .body{display:grid;grid-template-columns:1fr 172px}
+  @media(max-width:520px){.desk .body{grid-template-columns:1fr}}
+  .desk .chart{padding:12px 8px 0 10px;min-width:0}
+  .desk .rules{border-left:1px solid var(--desk-line);padding:12px 14px;font-family:var(--mono);font-size:11.5px;display:grid;gap:12px;align-content:start}
+  @media(max-width:520px){.desk .rules{border-left:none;border-top:1px solid var(--desk-line);grid-template-columns:1fr 1fr 1fr;gap:10px}}
+  .rule .k{color:var(--desk-muted);letter-spacing:.04em;text-transform:uppercase;font-size:10px}
+  .rule .v{color:var(--desk-text);font-size:13px;margin-top:3px}
+  .rule .m{height:4px;border-radius:2px;background:rgba(255,255,255,.08);margin-top:6px;overflow:hidden}
+  .rule .m b{display:block;height:100%;background:var(--brand-bright);border-radius:2px}
+  .feedwrap{padding:6px 14px 12px;border-top:1px solid var(--desk-line)}
+  .feed-h{display:flex;justify-content:space-between;font-family:var(--mono);font-size:10.5px;color:var(--desk-muted);padding:8px 4px 6px;letter-spacing:.05em;text-transform:uppercase}
+  .feed{font-family:var(--mono);font-size:12.3px;display:grid;gap:3px;min-height:132px}
+  .feed .row{display:grid;grid-template-columns:58px 1fr;gap:10px;padding:4px;border-radius:6px;align-items:start;animation:rowin .45s ease both;line-height:1.35}
+  @keyframes rowin{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+  .feed .t{color:var(--desk-muted)}
+  .feed .x{color:#DCE6E0;min-width:0}
+  .feed .x b{font-weight:500}
+  .feed .x b.buy{color:var(--brand-bright)} .feed .x b.sell{color:var(--sell)} .feed .x b.desk{color:#F0D08A}
+  .deskcap{font-size:13.5px;color:var(--muted);margin-top:14px;text-align:center}
+
+  /* strip */
+  .strip{border-top:1px solid var(--line);border-bottom:1px solid var(--line);background:var(--paper-2);overflow:hidden;margin-top:44px}
+  .strip .run{display:flex;gap:44px;padding:13px 0;font-family:var(--mono);font-size:13px;color:var(--muted);white-space:nowrap;width:max-content;animation:scroll 40s linear infinite}
+  .strip .run span b{color:var(--ink);font-weight:500}
+  @keyframes scroll{to{transform:translateX(-50%)}}
+  @media(prefers-reduced-motion:reduce){.strip .run{animation:none}.desk .bar .live i{animation:none}.feed .row{animation:none}}
+
+  section{padding:84px 0}
+  .lead{max-width:62ch}
+  .lead h2{margin-top:14px}
+  .lead p{color:var(--ink-2);margin-top:18px;font-size:18px}
+
+  /* three answers */
+  .answers{margin-top:40px;display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
+  @media(max-width:860px){.answers{grid-template-columns:1fr}}
+  .ans{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:22px;display:grid;gap:12px;align-content:start}
+  .ans .q{font-family:var(--mono);font-size:12px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)}
+  .ans h3{font-size:20px}
+  .ans p{color:var(--ink-2);font-size:15px}
+  .ans .opts{display:flex;gap:7px;flex-wrap:wrap}
+  .ans .opts span{font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:999px;border:1px solid var(--line);color:var(--ink-2)}
+  .ans .opts span.on{background:var(--brand-soft);border-color:transparent;color:var(--brand-ink)}
+  .then{margin-top:22px;display:flex;gap:14px;align-items:center;flex-wrap:wrap;font-size:16px;color:var(--ink-2)}
+  .then b{color:var(--ink);font-weight:600}
+
+  /* what it does on its own */
+  .does{margin-top:40px;border-top:1px solid var(--line)}
+  .do{display:grid;grid-template-columns:160px 1fr 1fr;gap:24px;padding:22px 0;border-bottom:1px solid var(--line);align-items:start}
+  @media(max-width:860px){.do{grid-template-columns:1fr;gap:8px}}
+  .do .k{font-family:var(--mono);font-size:12.5px;color:var(--brand-ink);letter-spacing:.04em;padding-top:4px}
+  .do h3{font-size:19px}
+  .do p{color:var(--ink-2);margin-top:6px;font-size:15.5px;max-width:48ch}
+  .do .say{font-family:var(--mono);font-size:12.8px;color:var(--ink-2);background:var(--paper-2);border-radius:12px;padding:12px 14px;line-height:1.5;border:1px solid var(--line)}
+  .do .say b{color:#8A6314;font-weight:500}
+  :root[data-theme="dark"] .do .say b,:root:not([data-theme="light"]) .do .say b{color:#F0D08A}
+
+  /* your call */
+  .calls{margin-top:36px;display:grid;grid-template-columns:repeat(5,1fr);gap:1px;background:var(--line);border:1px solid var(--line);border-radius:16px;overflow:hidden}
+  @media(max-width:1000px){.calls{grid-template-columns:repeat(2,1fr)}}
+  @media(max-width:560px){.calls{grid-template-columns:1fr}}
+  .call{background:var(--card);padding:20px 18px;display:grid;gap:8px;align-content:start}
+  .call .k{font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--amber);display:flex;align-items:center;gap:7px}
+  .call .k::before{content:"";width:7px;height:7px;border-radius:2px;background:var(--amber)}
+  .call h3{font-size:17px}
+  .call p{color:var(--ink-2);font-size:14.5px}
+
+  /* telegram demo */
+  .demo{display:grid;grid-template-columns:.9fr 1.1fr;gap:44px;align-items:start;margin-top:44px}
+  @media(max-width:960px){.demo{grid-template-columns:1fr}}
+  .phone{background:var(--card);border:1px solid var(--line);border-radius:22px;padding:18px 16px 16px;max-width:460px;box-shadow:0 20px 40px -30px rgba(20,18,14,.35)}
+  .phone .ph{display:flex;align-items:center;gap:10px;padding:0 4px 12px;border-bottom:1px solid var(--line);margin-bottom:12px}
+  .phone .ph .av{width:34px;height:34px;border-radius:50%;background:var(--brand);color:#fff;display:grid;place-items:center;font-family:var(--display);font-weight:800;font-size:15px}
+  .phone .ph .nm{font-weight:600;font-size:15px;line-height:1.15}
+  .phone .ph .nm small{display:block;font-weight:400;font-size:12.5px;color:var(--brand-ink)}
+  .msgs{display:grid;gap:9px}
+  .msg{max-width:90%;padding:10px 13px;border-radius:16px;font-size:14.3px;line-height:1.45}
+  .msg.bot{background:var(--paper-2);border-bottom-left-radius:5px;justify-self:start}
+  .msg.me{background:var(--ink);color:var(--paper);border-bottom-right-radius:5px;justify-self:end}
+  .msg .t{display:block;font-family:var(--mono);font-size:10.5px;color:var(--muted);margin-top:5px}
+  .msg.me .t{color:color-mix(in srgb,var(--paper) 60%,transparent)}
+  .msg .kb{display:flex;gap:6px;margin-top:9px;flex-wrap:wrap}
+  .msg .kb span{padding:6px 10px;border-radius:9px;font-weight:600;font-size:12.5px;border:1px solid var(--line);background:var(--card)}
+  .msg .kb span.on{background:var(--brand);border-color:var(--brand);color:#fff}
+  .msg.call{border:1px solid var(--amber);background:var(--amber-soft)}
+  .demo-notes{display:grid;gap:22px;padding-top:6px}
+  .dn{display:grid;grid-template-columns:28px 1fr;gap:14px}
+  .dn .n{font-family:var(--mono);font-size:12.5px;color:var(--brand-ink);padding-top:4px}
+  .dn p{color:var(--ink-2);margin-top:6px;font-size:15.5px}
+
+  /* control */
+  .control{background:var(--desk);color:var(--desk-text);border-radius:22px;padding:clamp(26px,5vw,56px);position:relative;overflow:hidden}
+  .control::before{content:"";position:absolute;inset:0;background:radial-gradient(90% 70% at 8% -20%,rgba(63,191,140,.14),transparent 60%)}
+  .control > *{position:relative}
+  .control .eyebrow{color:var(--brand-bright)}
+  .control .eyebrow::before{background:var(--brand-bright)}
+  .control h2{color:#fff;max-width:20ch;margin-top:14px}
+  .control .lede{color:#B9C6BE;margin-top:16px}
+  .guards{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;margin-top:40px;background:var(--desk-line);border:1px solid var(--desk-line);border-radius:14px;overflow:hidden}
+  @media(max-width:860px){.guards{grid-template-columns:1fr}}
+  .guard{background:var(--desk);padding:24px 22px;display:grid;gap:10px;align-content:start}
+  .guard .k{font-family:var(--mono);font-size:11.5px;color:var(--brand-bright);letter-spacing:.05em;text-transform:uppercase;display:flex;align-items:center;gap:8px}
+  .guard .k::before{content:"";width:7px;height:7px;border-radius:2px;background:var(--brand-bright)}
+  .guard h3{color:#fff;font-size:18.5px}
+  .guard p{color:#A9B7AE;font-size:15px}
+  .status{margin-top:22px;display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--desk-line);border:1px solid var(--desk-line);border-radius:12px;overflow:hidden;font-family:var(--mono);font-size:12.5px}
+  @media(max-width:860px){.status{grid-template-columns:1fr 1fr}}
+  .status div{background:var(--desk-2);padding:13px 14px;display:grid;gap:5px}
+  .status .k{color:var(--desk-muted);font-size:10.5px;letter-spacing:.05em;text-transform:uppercase}
+  .status .v{color:#fff}
+  .status .v.ok::before,.status .v.soon::before{content:"";display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:7px;vertical-align:1px}
+  .status .v.ok::before{background:var(--brand-bright)} .status .v.soon::before{background:#F0D08A}
+
+  /* refusals */
+  .no{margin-top:40px;display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
+  @media(max-width:860px){.no{grid-template-columns:1fr}}
+  .nc{border-top:2px solid var(--line-strong);padding-top:16px;display:grid;gap:8px;align-content:start}
+  .nc .x{font-family:var(--mono);font-size:12px;color:var(--sell);letter-spacing:.05em;text-transform:uppercase}
+  .nc p{color:var(--ink-2);font-size:15.5px}
+  .nc p b{color:var(--ink);font-weight:600}
+
+  /* pricing */
+  .sheet{margin-top:40px;display:grid;grid-template-columns:1.25fr .75fr;gap:22px}
+  @media(max-width:860px){.sheet{grid-template-columns:1fr}}
+  .fees{border:1px solid var(--line-strong);border-radius:16px;overflow:hidden;background:var(--card)}
+  .fr{display:flex;justify-content:space-between;align-items:center;gap:20px;padding:20px 24px;border-bottom:1px solid var(--line)}
+  .fr:last-child{border-bottom:none}
+  .fr .d{font-size:16px;max-width:62%}
+  .fr .d small{display:block;color:var(--muted);font-size:13.5px;margin-top:3px}
+  .fr .v{font-family:var(--display);font-weight:700;font-size:32px;letter-spacing:-.03em}
+  .fr .v.free{color:var(--brand-ink)}
+  .ex{background:var(--paper-2);padding:16px 24px;font-size:14.5px;color:var(--ink-2);border-top:1px solid var(--line)}
+  .ex b{color:var(--ink);font-weight:600}
+  .refer{background:var(--brand);color:#fff;border-radius:16px;padding:26px;display:flex;flex-direction:column;justify-content:center;gap:10px}
+  .refer .eyebrow{color:#DDF2E7} .refer .eyebrow::before{background:#DDF2E7}
+  .refer h3{color:#fff;font-size:22px;margin-top:4px}
+  .refer p{color:#D6EBE0;font-size:15px}
+  .refer b{color:#fff;font-weight:700}
+
+  /* faq */
+  .faq{margin-top:34px;max-width:860px}
+  details{border-bottom:1px solid var(--line)}
+  summary{list-style:none;cursor:pointer;padding:20px 0;font-weight:600;font-size:17.5px;display:flex;justify-content:space-between;gap:20px;align-items:center;font-family:var(--display);letter-spacing:-.01em}
+  summary::-webkit-details-marker{display:none}
+  summary .pm{font-family:var(--mono);color:var(--muted);font-size:20px;transition:transform .18s;flex:none}
+  details[open] summary .pm{transform:rotate(45deg)}
+  details .a{padding:0 0 22px;color:var(--ink-2);max-width:72ch;font-size:16px}
+
+  /* start */
+  .start{background:var(--card);border:1px solid var(--line);border-radius:22px;padding:clamp(26px,5vw,52px);display:grid;grid-template-columns:1.1fr .9fr;gap:40px;align-items:center}
+  @media(max-width:860px){.start{grid-template-columns:1fr}}
+  .start h2{margin-top:14px}
+  .start .lede{margin-top:16px}
+  .checklist{list-style:none;padding:0;margin:0;display:grid;gap:12px}
+  .checklist li{display:grid;grid-template-columns:30px 1fr;gap:12px;align-items:start;font-size:15.5px;color:var(--ink-2)}
+  .checklist li b{color:var(--ink);font-weight:600;display:block}
+  .checklist .n{font-family:var(--mono);font-size:12.5px;color:var(--brand-ink);padding-top:3px}
+  .handle{display:flex;align-items:center;gap:10px;margin-top:22px;flex-wrap:wrap}
+  .handle code{font-family:var(--mono);font-size:15px;background:var(--paper-2);border:1px solid var(--line);padding:9px 12px;border-radius:10px}
+  .handle button{font-family:var(--body);font-size:13.5px;font-weight:600;padding:9px 12px;border-radius:10px;border:1px solid var(--line);background:transparent;color:var(--ink);cursor:pointer}
+  .handle button:hover{background:var(--paper-2)}
+
+  footer{border-top:1px solid var(--line);padding:38px 0 60px}
+  .foot{display:flex;justify-content:space-between;align-items:flex-end;gap:24px;flex-wrap:wrap}
+  .foot .links{display:flex;gap:20px;font-size:14px;color:var(--ink-2);flex-wrap:wrap}
+  .disc{font-size:12.5px;color:var(--muted);max-width:76ch;margin-top:18px;line-height:1.55}
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap nav">
+    <a class="word" href="#top" aria-label="Tenfold"><svg viewBox="0 0 24 24" aria-hidden="true"><rect class="mk" x="2" y="2" width="20" height="20" rx="5"/><path class="fold" d="M13 2h4a5 5 0 0 1 5 5v4L13 2z"/><path d="M7.5 16.5V9.2l2.2 1.3" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><circle cx="14.2" cy="13.5" r="2.9" fill="none" stroke="#fff" stroke-width="1.8"/></svg>tenfold</a>
+    <div class="nlinks">
+      <a class="l" href="#how">How it works</a>
+      <a class="l" href="#desk">The desk</a>
+      <a class="l" href="#control">Control</a>
+      <a class="l" href="#pricing">Pricing</a>
+      <a class="l" href="#faq">Questions</a>
+      <a class="btn" href="#start"><svg class="tg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M21.6 3.3 2.9 10.5c-1.3.5-1.3 1.2-.2 1.5l4.8 1.5 11.1-7c.5-.3 1-.1.6.2l-9 8.1-.3 4.9c.5 0 .7-.2 1-.5l2.4-2.3 4.9 3.6c.9.5 1.6.2 1.8-.8L22.8 4.7c.3-1.3-.5-1.9-1.2-1.4z"/></svg>Start on Telegram</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero" id="top">
+  <div class="wrap hero-grid">
+    <div>
+      <span class="eyebrow">market-making desk for solana founders</span>
+      <h1>Give it a mandate.<br>It runs the market.</h1>
+      <p class="lede">Tenfold is a market-making desk for your token. Answer three questions, fund a wallet it can never withdraw from, and it defends your price, places your supply into real buyers and reports to you, on its own. You hear from it when it matters, not all day.</p>
+      <ul class="claims">
+        <li>Decides on its own inside the limits you set: daily sell cap, defense budget, floor</li>
+        <li>Can trade. Cannot withdraw. Funds only ever go back to your wallet</li>
+        <li>Tells you in one line what it did and why, every time</li>
+        <li>Asks you only for the irreversible: more budget, a bigger cap, a withdrawal</li>
+      </ul>
+      <div class="cta">
+        <a class="btn brand" href="#start"><svg class="tg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M21.6 3.3 2.9 10.5c-1.3.5-1.3 1.2-.2 1.5l4.8 1.5 11.1-7c.5-.3 1-.1.6.2l-9 8.1-.3 4.9c.5 0 .7-.2 1-.5l2.4-2.3 4.9 3.6c.9.5 1.6.2 1.8-.8L22.8 4.7c.3-1.3-.5-1.9-1.2-1.4z"/></svg>Start on Telegram</a>
+        <a class="btn ghost" href="#how">See how it works</a>
+        <span class="note">Free to set up. No monthly fee. Paper mode first if you want.</span>
+      </div>
+    </div>
+
+    <div class="stack">
+      <div class="mandate" aria-label="Example mandate">
+        <div class="mh"><span>your mandate</span><b>set in 3 answers</b></div>
+        <div class="chips"><span class="chip">Protect</span><span class="chip on">Balanced</span><span class="chip">Distribute</span></div>
+        <p class="line"><b>50% of the vault over 30 days.</b> Tell me under 0.00012. Daily sell cap 0.5%, defense budget 20 SOL, 5 SOL a day max.</p>
+      </div>
+      <div class="desk" aria-label="Live view of the desk, as the founder sees it">
+        <div class="bar">
+          <span>tenfold · $DEMO / SOL</span>
+          <span class="priv"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>founder only</span>
+          <span class="live"><i></i>live</span>
+        </div>
+        <div class="body">
+          <div class="chart">
+            <svg id="chart" viewBox="0 0 520 190" style="width:100%;height:auto;display:block" role="img" aria-label="Price chart with the desk's buys and sells marked and the defended level drawn"></svg>
+          </div>
+          <div class="rules" aria-label="The founder's limits, enforced on every order">
+            <div class="rule"><div class="k">daily sell cap</div><div class="v num">0.50% · 31% used</div><div class="m"><b style="width:31%"></b></div></div>
+            <div class="rule"><div class="k">defense budget</div><div class="v num">20 SOL · 14.2 left</div><div class="m"><b style="width:71%"></b></div></div>
+            <div class="rule"><div class="k">horizon</div><div class="v num">38% done · day 11/30</div><div class="m"><b style="width:38%"></b></div></div>
+            <div class="rule"><div class="k">today</div><div class="v num">+2.9 SOL fees</div></div>
+          </div>
+        </div>
+        <div class="feedwrap">
+          <div class="feed-h"><span>the desk, live</span><span>fills + decisions</span></div>
+          <div class="feed" id="feed" aria-live="off"></div>
+        </div>
+      </div>
+      <p class="deskcap">This is what you see. Levels, sizes and timing stay private to you.</p>
+    </div>
+  </div>
+</header>
+
+<div class="strip" aria-hidden="true">
+  <div class="run" id="run">
+    <span>daily sell cap <b>checked on every single order</b></span>
+    <span>trading key <b>cannot move funds out</b></span>
+    <span>every decision <b>explained in one line</b></span>
+    <span>every deposit, buy and sell <b>logged and timestamped</b></span>
+    <span>daily fingerprint of the log <b>written on-chain</b></span>
+    <span>pause <b>from Telegram, instantly</b></span>
+  </div>
+</div>
+
+<section id="how">
+  <div class="wrap">
+    <div class="lead">
+      <span class="eyebrow">how it works</span>
+      <h2>Three answers. Then it runs.</h2>
+      <p>No levels to set, no dashboard to watch. You tell the desk what matters, it derives the rest from your limits and the market, and keeps adjusting as things move.</p>
+    </div>
+    <div class="answers">
+      <div class="ans"><div class="q">1 · what matters most</div><h3>Protect, balance, or distribute?</h3><p>Protect holds the price first and sells slowly. Balanced holds reasonable levels and distributes steadily. Distribute moves supply first and defends lightly, further down.</p><div class="opts"><span>Protect</span><span class="on">Balanced</span><span>Distribute</span></div></div>
+      <div class="ans"><div class="q">2 · how much, how fast</div><h3>What share of the vault, over how many days?</h3><p>The desk turns this into a daily pace, speeds up when it falls behind and slows down when it runs ahead. Never above your daily sell cap.</p><div class="opts"><span>10%</span><span class="on">50%</span><span>100%</span><span>14 d</span><span class="on">30 d</span><span>90 d</span></div></div>
+      <div class="ans"><div class="q">3 · when to tell you</div><h3>A price under which you want to hear from it?</h3><p>Not a selling floor, just the line where you want a message. The desk halves distribution under it and tells you once, not every hour.</p><div class="opts"><span class="on">0.00012</span><span>none</span></div></div>
+    </div>
+    <p class="then">Then you fund the project wallet with tokens and SOL, and <b>the desk is trading within the hour.</b> Paper mode first if you want to watch it with nothing at stake.</p>
+  </div>
+</section>
+
+<section id="desk">
+  <div class="wrap">
+    <div class="lead">
+      <span class="eyebrow">what the desk does on its own</span>
+      <h2>Runs your book like a desk would, and says why.</h2>
+      <p>Every decision below is made by the engine from rules, not by a chatbot, and reaches you as one line starting with "Desk:". You never have to answer.</p>
+    </div>
+    <div class="does">
+      <div class="do"><div class="k">defend</div><div><h3>Places levels under the price</h3><p>Trailing defense levels sit under a one-hour reference, wider when the market is wild so noise alone does not hit them, each with its own SOL budget inside your daily limit.</p></div><div class="say"><b>Desk:</b> Placed a defense level at 0.0001860 (7% under the 1h reference 0.0002000) with 5.00 SOL.</div></div>
+      <div class="do"><div class="k">breathe</div><div><h3>Steps down instead of burning</h3><p>When holding a level would eat the day's budget in a couple of hours, it lets the level breathe and re-places it lower. A level clearly lost is not chased down.</p></div><div class="say"><b>Desk:</b> Holding 0.0001860 costs about 3.8 SOL/hour at this flow and the budget would last 1.3 h. Letting it breathe: stepping the level down.</div></div>
+      <div class="do"><div class="k">rest</div><div><h3>Stays out of a falling market</h3><p>Two levels lost in a day and the defense rests for six hours, twelve after three. It does not buy into a trend with your treasury.</p></div><div class="say"><b>Desk:</b> Level 0.0001720 is lost: price is 16% under it. That is 2 levels lost in 24h, so the defense rests 6 h instead of buying into the trend.</div></div>
+      <div class="do"><div class="k">distribute</div><div><h3>Sells into real strength, on pace</h3><p>Leans into strong green candles, backs off when sellers dominate the hour, catches up when behind the horizon, never below your floor and never past your cap.</p></div><div class="say"><b>Desk:</b> Distribution pace 0.30% → 0.15% of the vault per day: sellers dominate this hour, not adding supply to that.</div></div>
+      <div class="do"><div class="k">protect</div><div><h3>Stops when something is wrong</h3><p>Pool liquidity gone, a team wallet selling, a 35% move in five minutes: everything halts, you get the facts, and nothing restarts without you.</p></div><div class="say"><b>Desk:</b> Pool liquidity dropped from 210 to 48 SOL within the hour. Everything is stopped: trading into a drained pool only loses.</div></div>
+      <div class="do"><div class="k">report</div><div><h3>Reports every day, in numbers</h3><p>What sold and at what average against the token's own VWAP, what it cost to defend, where the horizon stands, what you earned in fees. A seven-day version every Monday.</p></div><div class="say">Sold: 12,500 tokens for 2.41 SOL @ 0.0001930 (+120 bps vs token VWAP) · Bought: 71,000 tokens for 14.8 SOL (defense) · Fees: 0.09 SOL</div></div>
+    </div>
+
+    <div class="lead" style="margin-top:72px">
+      <span class="eyebrow">when it asks you</span>
+      <h2>Five things, and only these.</h2>
+      <p>Anything it cannot undo or cannot bound on its own comes to you as a short question with the options. Everything else, it handles.</p>
+    </div>
+    <div class="calls">
+      <div class="call"><div class="k">your call</div><h3>Budget used up</h3><p>The defense budget you set is spent. Top it up, send more SOL, or leave the defense resting.</p></div>
+      <div class="call"><div class="k">your call</div><h3>Horizon too fast for the cap</h3><p>Your share and days need more than the daily cap allows. Raise the cap (48 h), extend the horizon, or accept the pace.</p></div>
+      <div class="call"><div class="k">your call</div><h3>Liquidity pulled</h3><p>The pool lost half its liquidity in an hour. Everything is paused until you say resume.</p></div>
+      <div class="call"><div class="k">your call</div><h3>A team wallet sold</h3><p>Distribution is on hold for a day so the desk does not add to that. Tell it if it was planned.</p></div>
+      <div class="call"><div class="k">your call</div><h3>Target reached</h3><p>Your share is distributed. Set a new mandate, keep only defending, or withdraw.</p></div>
+    </div>
+
+    <div class="demo">
+      <div class="phone" aria-label="Example conversation with Tenfold on Telegram">
+        <div class="ph"><div class="av">t</div><div class="nm">Tenfold · $DEMO<small>online · live mode</small></div></div>
+        <div class="msgs">
+          <div class="msg bot">Welcome. One question at a time. What matters most right now?<div class="kb"><span>Protect</span><span class="on">Balanced</span><span>Distribute</span></div><span class="t">09:12 UTC</span></div>
+          <div class="msg bot">How much of the vault, over how long?<div class="kb"><span>10% · 30 d</span><span class="on">50% · 30 d</span><span>100% · 60 d</span></div><span class="t">09:12 UTC</span></div>
+          <div class="msg me">tell me under 0.00012<span class="t">09:13</span></div>
+          <div class="msg bot">Mandate set: hold reasonable levels and distribute steadily, 50% of the vault over 30 days, tell you under 0.00012. At your 0.5% cap that takes about 100 days, not 30; I'll go at the cap. Raise the cap (48 h), extend the horizon, or accept?<span class="t">09:13 UTC</span></div>
+          <div class="msg me">extend to 90 days<span class="t">09:14</span></div>
+          <div class="msg bot">Desk: Placed a defense level at 0.0001860 (7% under the 1h reference) with 5.00 SOL.<span class="t">09:15 UTC</span></div>
+          <div class="msg bot">Desk: Distribution pace 0.50% → 0.62%: buyers dominate this hour.<span class="t">14:40 UTC</span></div>
+          <div class="msg bot call">Your call: the defense budget is used up (0.4 SOL left of 20). Levels are resting; distribution continues. Options: top up the budget / send more SOL / leave it resting.<span class="t">Tue 11:02 UTC</span></div>
+        </div>
+      </div>
+      <div class="demo-notes">
+        <div class="dn"><div class="n">a</div><div><h3>Onboarding is three taps</h3><p>Profile, share and horizon, alert line. The desk derives levels, budgets and pace from your limits; you never type a price unless you want to.</p></div></div>
+        <div class="dn"><div class="n">b</div><div><h3>It tells you when the numbers don't add up</h3><p>Ask for more than your cap allows and it says so once, with the three honest ways out. No silent failure, no pretending.</p></div></div>
+        <div class="dn"><div class="n">c</div><div><h3>Decisions arrive as one line</h3><p>"Desk:" lines are information, not questions. Read them or don't; the daily report has it all.</p></div></div>
+        <div class="dn"><div class="n">d</div><div><h3>"Your call" is rare, and it waits</h3><p>Only the irreversible comes to you, with options. Pause is instant from your side at any time, and you can always take a level by hand: the desk never touches one you set.</p></div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="control">
+  <div class="wrap">
+    <div class="control">
+      <span class="eyebrow">you stay in control</span>
+      <h2>Your money never leaves your reach.</h2>
+      <p class="lede">Autonomy only works with hard walls around it. Here is exactly what the desk can and cannot do with your funds.</p>
+      <div class="guards">
+        <div class="guard"><div class="k">trade only</div><h3>It can't withdraw</h3><p>The desk holds a trading key that can swap and provide liquidity. It cannot send funds anywhere. Withdrawals settle to the wallet you registered at setup, after a delay you chose, and nowhere else.</p></div>
+        <div class="guard"><div class="k">hard limits</div><h3>Your limits bind the desk too</h3><p>The daily sell cap, the defense budget and the floor are checked by the engine on every order the desk produces. Lowering a limit is instant. Raising the sell cap takes 48 hours, so a bad day cannot turn into a bad decision.</p></div>
+        <div class="guard"><div class="k">your record</div><h3>Proof you hold</h3><p>Every deposit, order, fill, decision and withdrawal is logged with a timestamp and a transaction signature. Once a day, a fingerprint of that log is written on-chain. If anyone ever says your project rugged, the full record is yours to show.</p></div>
+      </div>
+      <div class="status" aria-label="Current safety status">
+        <div><span class="k">trading key</span><span class="v ok">cannot withdraw</span></div>
+        <div><span class="k">limits enforced by</span><span class="v ok">the engine, every order</span></div>
+        <div><span class="k">on-chain vault</span><span class="v soon">audit before launch</span></div>
+        <div><span class="k">beta size</span><span class="v ok">small vaults first</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="refuse">
+  <div class="wrap">
+    <div class="lead">
+      <span class="eyebrow">what it will not do</span>
+      <h2>The things it says no to are what make the rest believable.</h2>
+      <p>A market maker that will fake volume for you will fake it for the next guy too, and traders know it. Tenfold only does things you could show in daylight.</p>
+    </div>
+    <div class="no">
+      <div class="nc"><div class="x">refused</div><h3>Wash trading</h3><p>No buying its own sells, no cycling tokens between wallets, no "making the chart look active". <b>Instead:</b> real distribution into real buy flow, logged in your feed.</p></div>
+      <div class="nc"><div class="x">refused</div><h3>Hiding holdings</h3><p>No splitting the vault across wallets to look smaller, no disguising the team's share. <b>Instead:</b> transparent vesting or a published distribution schedule.</p></div>
+      <div class="nc"><div class="x">refused</div><h3>Fake engagement</h3><p>No bots, paid shills, fake holders or fake volume on trackers. <b>Instead:</b> steady liquidity and a trade log you can hand to anyone who asks.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="pricing">
+  <div class="wrap">
+    <div class="lead">
+      <span class="eyebrow">pricing</span>
+      <h2>Free to start. We earn only when it trades for you.</h2>
+      <p>No setup fee, no monthly fee, no minimum. Tenfold takes a small cut of the volume it trades for your token, and a cut when you cash out.</p>
+    </div>
+    <div class="sheet">
+      <div class="fees">
+        <div class="fr"><div class="d">Volume fee<small>on the volume the desk trades for your token</small></div><div class="v num">0.5%</div></div>
+        <div class="fr"><div class="d">Cashout fee<small>when you withdraw from the project wallet</small></div><div class="v num">2%</div></div>
+        <div class="fr"><div class="d">Setup and monthly<small>nothing to pay to run it</small></div><div class="v free">$0</div></div>
+        <div class="ex">Worked example: on a day where the desk trades <b>100 SOL</b> of volume for your token, its fee is <b>0.5 SOL</b>. If it trades nothing, you pay nothing. Fees accrue in the open and show in your daily report.</div>
+      </div>
+      <div class="refer">
+        <span class="eyebrow">referrals</span>
+        <h3>Bring a founder, earn for life.</h3>
+        <p>Earn <b>10%</b> of Tenfold's fees from every project they run, for as long as it runs.</p>
+        <p>They get <b>10% off</b> every fee, for life.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="faq" style="padding-top:28px">
+  <div class="wrap">
+    <div class="lead"><span class="eyebrow">questions</span><h2>Straight answers.</h2></div>
+    <div class="faq">
+      <details><summary>Can the desk run off with my tokens?<span class="pm">+</span></summary><div class="a">No. It trades from a wallet you fund, with a key that can only swap and provide liquidity. It cannot withdraw. Funds settle back to the wallet you registered at setup, only after the delay you chose, and you can pause everything from Telegram at any moment.</div></details>
+      <details><summary>Do I really not have to watch it?<span class="pm">+</span></summary><div class="a">You don't. The desk places and moves levels, paces distribution and handles bad hours by itself, and tells you in one line each time. It only asks you for the five things it cannot decide alone: more budget, a cap raise, a liquidity pull, a team wallet selling, the target reached. If you prefer to approve each change, switch it to "ask" mode.</div></details>
+      <details><summary>Will it pump my chart?<span class="pm">+</span></summary><div class="a">No. Tenfold provides real liquidity and sells your supply into real demand. It does not trade against itself or manufacture volume. That is what keeps you clean, and it is also what actually earns you a better average price than dumping.</div></details>
+      <details><summary>What happens if the price crashes?<span class="pm">+</span></summary><div class="a">It defends inside the budget you set and stops chasing once a level is clearly lost. After two lost levels in a day it rests the defense for hours rather than buying into the trend. A circuit breaker holds all orders on a 35% move in five minutes. You get the facts, and the defense comes back on its own when the market calms.</div></details>
+      <details><summary>Who can see what it's doing?<span class="pm">+</span></summary><div class="a">You. Your mandate, levels, sizes, timing and wallet are private, shown only on your own live feed and through your bot. On-chain, a Tenfold trade looks like any other trade. Clip sizes and timing are varied so nobody can front-run the desk.</div></details>
+      <details><summary>Can I still take control by hand?<span class="pm">+</span></summary><div class="a">Yes. Any level you set yourself is pinned: the desk never moves or removes it. Pause is instant. Lowering your cap or budget is instant. Raising the cap takes 48 hours by design. And you can change the mandate at any time in one message.</div></details>
+      <details><summary>Can I try it without real money?<span class="pm">+</span></summary><div class="a">Yes. Every project can start in paper mode: real prices, simulated fills, nothing spent. Switch to live when you are comfortable. In the beta, live vaults start small on purpose.</div></details>
+      <details><summary>How do I stop it, or get my funds out?<span class="pm">+</span></summary><div class="a">Send /pause to your bot and no new order is placed, instantly. To withdraw, request it from the bot: it settles to your registered wallet after the delay you chose at setup, minus the 2% cashout fee. Nobody at Tenfold can redirect it.</div></details>
+      <details><summary>Is it audited?<span class="pm">+</span></summary><div class="a">The beta enforces the cap, the budget and the withdrawal delay in the engine, and keeps vaults small. The on-chain vault program that moves those rules into a contract is being completed and will go through an independent audit before it handles founder funds. We will publish the report.</div></details>
+    </div>
+  </div>
+</section>
+
+<section id="start">
+  <div class="wrap">
+    <div class="start">
+      <div>
+        <span class="eyebrow">start a project</span>
+        <h2>Put a desk on your token today.</h2>
+        <p class="lede">Open Telegram, send the bot your mint address, answer three questions, fund the wallet. Paper mode first if you want, live when you are ready.</p>
+        <div class="handle">
+          <a class="btn brand" id="tgcta" href="https://t.me/tenfoldtrade" target="_blank" rel="noopener"><svg class="tg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M21.6 3.3 2.9 10.5c-1.3.5-1.3 1.2-.2 1.5l4.8 1.5 11.1-7c.5-.3 1-.1.6.2l-9 8.1-.3 4.9c.5 0 .7-.2 1-.5l2.4-2.3 4.9 3.6c.9.5 1.6.2 1.8-.8L22.8 4.7c.3-1.3-.5-1.9-1.2-1.4z"/></svg>Open Tenfold on Telegram</a>
+          <code id="handle">@tenfoldtrade</code>
+          <button type="button" id="copy">Copy</button>
+        </div>
+      </div>
+      <ul class="checklist">
+        <li><span class="n">01</span><span><b>Your mint address</b>The token the desk will trade. Any Solana token with a live pool.</span></li>
+        <li><span class="n">02</span><span><b>Three answers</b>What matters most, how much over how long, when to tell you. Thirty seconds.</span></li>
+        <li><span class="n">03</span><span><b>Tokens and SOL</b>Tokens to distribute, SOL to defend with. Start small; you can top up any time.</span></li>
+        <li><span class="n">04</span><span><b>Your limits</b>Daily sell cap, defense budget and daily max, floor. The desk suggests conservative ones sized to your deposit.</span></li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="foot">
+      <a class="word" href="#top"><svg viewBox="0 0 24 24" aria-hidden="true"><rect class="mk" x="2" y="2" width="20" height="20" rx="5"/><path class="fold" d="M13 2h4a5 5 0 0 1 5 5v4L13 2z"/><path d="M7.5 16.5V9.2l2.2 1.3" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><circle cx="14.2" cy="13.5" r="2.9" fill="none" stroke="#fff" stroke-width="1.8"/></svg>tenfold</a>
+      <div class="links"><a href="#how">How it works</a><a href="#desk">The desk</a><a href="#control">Control</a><a href="#pricing">Pricing</a><a href="#faq">Questions</a><a href="https://t.me/tenfoldtrade" target="_blank" rel="noopener">Telegram</a></div>
+    </div>
+    <p class="disc">Tenfold provides market-making services for Solana tokens. It does not guarantee any price, return or outcome, and nothing on this page is investment advice. Crypto markets carry risk, including loss of the funds you deposit. You set your project's limits and keep control of your funds at all times; the beta enforces those limits in the engine while the on-chain vault completes its audit.</p>
+  </div>
+</footer>
+
+<script>
+(function(){
+  var reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  // ---- candlestick chart with the desk's markers and the defended level ----
+  var svg = document.getElementById("chart");
+  var W=520,H=190,pad=10,n=34;
+  var seed=7; function rnd(){ seed=(seed*1103515245+12345)&0x7fffffff; return (seed/0x7fffffff); }
+  var price=100, candles=[];
+  for(var i=0;i<n;i++){
+    var o=price, drift=(rnd()-0.48)*2.4, c=o+drift, hi=Math.max(o,c)+rnd()*1.6, lo=Math.min(o,c)-rnd()*1.6;
+    candles.push({o:o,c:c,hi:hi,lo:lo}); price=c;
+  }
+  var all=[]; candles.forEach(function(k){ all.push(k.hi,k.lo); });
+  var max=Math.max.apply(null,all), min=Math.min.apply(null,all), rng=(max-min)||1;
+  function y(v){ return pad + (H-2*pad) * (1-(v-min)/rng); }
+  var cw=(W-2*pad)/n, bw=cw*0.56, parts="";
+  var lvl = min + rng*0.34;
+  parts+="<line x1='"+pad+"' y1='"+y(lvl).toFixed(1)+"' x2='"+(W-pad)+"' y2='"+y(lvl).toFixed(1)+"' stroke='rgba(63,191,140,.45)' stroke-dasharray='3 4' stroke-width='1'/>";
+  parts+="<text x='"+(W-pad)+"' y='"+(y(lvl)-5).toFixed(1)+"' text-anchor='end' font-family='IBM Plex Mono,monospace' font-size='9' fill='rgba(63,191,140,.85)'>desk level 0.000186</text>";
+  candles.forEach(function(k,i){
+    var x=pad+i*cw+cw/2, up=k.c>=k.o, col=up?"#3FBF8C":"#E0665E";
+    parts+="<line x1='"+x.toFixed(1)+"' y1='"+y(k.hi).toFixed(1)+"' x2='"+x.toFixed(1)+"' y2='"+y(k.lo).toFixed(1)+"' stroke='"+col+"' stroke-width='1' opacity='.9'/>";
+    var yt=Math.min(y(k.o),y(k.c)), hh=Math.max(2,Math.abs(y(k.o)-y(k.c)));
+    parts+="<rect x='"+(x-bw/2).toFixed(1)+"' y='"+yt.toFixed(1)+"' width='"+bw.toFixed(1)+"' height='"+hh.toFixed(1)+"' fill='"+col+"' opacity='"+(up?.95:.9)+"' rx='1'/>";
+  });
+  function tri(x,yy,dir,col){ var s=4.5; var p = dir>0 ? (x)+","+(yy)+" "+(x-s)+","+(yy+s*1.5)+" "+(x+s)+","+(yy+s*1.5) : (x)+","+(yy)+" "+(x-s)+","+(yy-s*1.5)+" "+(x+s)+","+(yy-s*1.5); return "<polygon points='"+p+"' fill='"+col+"'/>"; }
+  [{i:6,b:1},{i:11,b:1},{i:19,b:0},{i:23,b:1},{i:28,b:0}].forEach(function(m){
+    var k=candles[m.i], x=pad+m.i*cw+cw/2;
+    if(m.b){ parts+=tri(x, y(k.lo)+8, 1, "#3FBF8C"); } else { parts+=tri(x, y(k.hi)-8, -1, "#E0665E"); }
+  });
+  svg.innerHTML=parts;
+
+  // ---- live feed: fills and desk decisions (illustrative) ----
+  var feed=document.getElementById("feed");
+  function pad2(x){return (x<10?"0":"")+x;}
+  var t=new Date(); t.setHours(13,42,8,0);
+  var deskLines=[
+    "<b class='desk'>Desk:</b> distribution pace 0.50% → 0.62%: buyers dominate this hour.",
+    "<b class='desk'>Desk:</b> letting 0.000186 breathe: holding costs 3.8 SOL/h, stepping the level down.",
+    "<b class='desk'>Desk:</b> placed a defense level at 0.000171 with 5.00 SOL.",
+    "<b class='desk'>Desk:</b> trailing the level up to 0.000190: price held 14% above for 3 h."
+  ];
+  var di=0, seq=0;
+  function mk(kind){
+    t=new Date(t.getTime()+ (6+Math.floor(Math.random()*40))*1000);
+    var ts=pad2(t.getHours())+":"+pad2(t.getMinutes())+":"+pad2(t.getSeconds());
+    var row=document.createElement("div"); row.className="row";
+    var x;
+    if(kind==="desk"){ x=deskLines[di++ % deskLines.length]; }
+    else {
+      var sol=(0.08+Math.random()*0.55).toFixed(2);
+      var px=(0.00180+Math.random()*0.00030).toFixed(5);
+      var why = kind==="buy" ? "defense" : (Math.random()<0.8?"distribution":"rebalance");
+      x="<b class='"+kind+"'>"+(kind==="buy"?"BUY":"SELL")+"</b> "+sol+" SOL · "+px+" · "+why;
+    }
+    row.innerHTML="<span class='t'>"+ts+"</span><span class='x'>"+x+"</span>";
+    return row;
+  }
+  ["sell","desk","buy","sell"].forEach(function(k){ feed.appendChild(mk(k)); });
+  if(!reduce){
+    setInterval(function(){
+      seq++;
+      var kind = seq%4===0 ? "desk" : (Math.random()<0.58 ? "sell":"buy");
+      feed.insertBefore(mk(kind), feed.firstChild);
+      while(feed.children.length>5) feed.removeChild(feed.lastChild);
+    }, 2800);
+  }
+  var run=document.getElementById("run"); if(run){ run.innerHTML += run.innerHTML; }
+
+  // ---- copy the Telegram handle ----
+  var copy=document.getElementById("copy"), handle=document.getElementById("handle");
+  if(copy && handle){
+    copy.addEventListener("click", function(){
+      var text=handle.textContent;
+      function done(){ copy.textContent="Copied"; setTimeout(function(){ copy.textContent="Copy"; }, 1600); }
+      function fallback(){ var r=document.createRange(); r.selectNodeContents(handle); var s=window.getSelection(); s.removeAllRanges(); s.addRange(r); }
+      if(navigator.clipboard && navigator.clipboard.writeText){ navigator.clipboard.writeText(text).then(done, fallback); } else { fallback(); }
+    });
+  }
+})();
+</script>
+
+</body>
+</html>

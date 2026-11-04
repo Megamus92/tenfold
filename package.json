@@ -1,0 +1,32 @@
+{
+  "name": "tenfold-mm",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Tenfold: self-serve AI market maker for Solana tokens. Engine, Telegram agent, proof page, vault program.",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false",
+    "test": "vitest run",
+    "engine": "node --no-warnings apps/engine/dist/main.js",
+    "agent": "node --no-warnings apps/agent/dist/main.js",
+    "proof": "node --no-warnings apps/proof/dist/main.js",
+    "onboard": "node --no-warnings apps/onboard/dist/main.js",
+    "marketing": "node --no-warnings apps/marketing/dist/main.js",
+    "project:add": "node --no-warnings scripts/add-project.js",
+    "wallet:new": "node --no-warnings scripts/new-wallet.js",
+    "trader-bot": "node --no-warnings apps/trader-bot/dist/main.js"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  }
+}
